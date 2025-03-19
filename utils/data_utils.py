@@ -53,6 +53,7 @@ from pdb import set_trace
 import h5py
 from scipy.spatial.transform import Rotation as R
 import time
+import pyzed.sl as sl
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 MAX_NUM_TOKENS = 256
@@ -3528,19 +3529,6 @@ def get_oxe_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
 
 
 class PickBottleDataset(Dataset):
-    """
-    Dataset for loading pick_bottle data collected with timestamp folders.
-    
-    Args:
-        dataset_dir: Path to the root directory containing timestamp folders
-        image_fn: Function to preprocess images
-        text_fn: Function to preprocess text
-        window_size: Size of the trajectory window to return
-        act_step: Number of action steps to predict
-        min_window_size: Minimum window length
-        max_window_size: Maximum window length
-        pad: Whether to pad sequences to max_window_size
-    """
     def __init__(
         self,
         dataset_dir,
@@ -3576,52 +3564,28 @@ class PickBottleDataset(Dataset):
             self.min_window_size = min_window_size
             self.max_window_size = max_window_size
             
-        # Initialize RGB shift augmentation if needed
-        if self.rgb_pad != -1:
-            self.rgb_shift = RandomShiftsAug(rgb_pad)
-        if self.gripper_pad != -1:
-            self.gripper_shift = RandomShiftsAug(gripper_pad)
-            
-        # Find all timestamp folders
         self.timestamp_folders = sorted(glob.glob(str(self.dataset_dir / "20*-*-*_*-*-*")))
         print(f"Found {len(self.timestamp_folders)} timestamp folders")
         
-        # Build index mapping
         self.episode_lookup, self.folder_mapping = self._build_file_indices()
         print(f"Total number of trajectory windows: {len(self.episode_lookup)}")
         
-        # For video frame cache
         self.video_cache = {}
-        
-        # Fixed language instruction for pick_bottle task
         self.language_instruction = "Pick up the bottle"
         
     def _build_file_indices(self):
-        """
-        Build mapping from training example index to episode/file details.
-        
-        Returns:
-            episode_lookup: List of (folder_idx, episode_idx, start_frame_idx) tuples
-            folder_mapping: Mapping from folder_idx to folder path
-        """
         episode_lookup = []
         folder_mapping = {}
         
         for folder_idx, folder_path in enumerate(self.timestamp_folders):
             folder_mapping[folder_idx] = folder_path
-            
-            # Find all episode files in this folder
             h5_files = sorted(glob.glob(os.path.join(folder_path, "episode_*.hdf5")))
             
             for episode_file in h5_files:
                 episode_idx = int(os.path.basename(episode_file).split("_")[1].split(".")[0])
-                
-                # Get episode length from h5 file
                 with h5py.File(episode_file, "r") as f:
-                    # Assuming timestamp length is the episode length
                     episode_length = len(f["timestamp"][:])
                 
-                # Create indices for sliding windows
                 if episode_length > self.max_window_size:
                     for start_idx in range(0, episode_length - self.min_window_size + 1):
                         episode_lookup.append((folder_idx, episode_idx, start_idx))
@@ -3629,306 +3593,203 @@ class PickBottleDataset(Dataset):
         return episode_lookup, folder_mapping
     
     def _load_episode(self, idx):
-        """
-        Load episode data based on the index.
-        
-        Args:
-            idx: Index in the episode_lookup
-            
-        Returns:
-            Dictionary containing robot state, actions, and image data
-        """
         folder_idx, episode_idx, start_frame_idx = self.episode_lookup[idx]
         folder_path = self.folder_mapping[folder_idx]
         
-        # Construct h5 filename
         h5_filename = os.path.join(folder_path, f"episode_{episode_idx:09d}.hdf5")
-        
-        # Get video filename
         video_filename = os.path.join(folder_path, f"episode_{episode_idx:09d}_top.svo2")
         
-        # Load h5 data
         with h5py.File(h5_filename, "r") as f:
-            # Get window size
             window_size = min(self.max_window_size, len(f["timestamp"][:]) - start_frame_idx)
             
-            # Extract all action and state data with original dimensions
-            actions_robot = f["action/robot"][start_frame_idx:start_frame_idx + window_size]  # 29 dims
-            actions_hand = f["action/hand"][start_frame_idx:start_frame_idx + window_size]    # 12 dims
-            actions_pose = f["action/pose"][start_frame_idx:start_frame_idx + window_size]    # 24 dims
+            # Load all action dimensions
+            actions_hand = f["action/hand"][start_frame_idx:start_frame_idx + window_size]    # (window_size, 12)
+            actions_pose = f["action/pose"][start_frame_idx:start_frame_idx + window_size]    # (window_size, 24)
+            actions_robot = f["action/robot"][start_frame_idx:start_frame_idx + window_size]  # (window_size, 29)
+            actions = np.concatenate([actions_hand, actions_pose, actions_robot], axis=1)     # (window_size, 65)
             
-            state_robot = f["state/robot"][start_frame_idx:start_frame_idx + window_size]     # 29 dims
-            state_hand = f["state/hand"][start_frame_idx:start_frame_idx + window_size]       # 12 dims
-            state_pose = f["state/pose"][start_frame_idx:start_frame_idx + window_size]       # 27 dims
+            # Load all state dimensions
+            state_hand = f["state/hand"][start_frame_idx:start_frame_idx + window_size]       # (window_size, 12)
+            state_pose = f["state/pose"][start_frame_idx:start_frame_idx + window_size]       # (window_size, 27)
+            state_robot = f["state/robot"][start_frame_idx:start_frame_idx + window_size]     # (window_size, 29)
+            state = np.concatenate([state_hand, state_pose, state_robot], axis=1)             # (window_size, 68)
             
             timestamps = f["timestamp"][start_frame_idx:start_frame_idx + window_size]
         
-        # Load video frames matching timestamps
         frames = self._load_video_frames(video_filename, timestamps)
         
-        # Keep all dimensions for actions and states
         return {
-            "actions_robot": actions_robot,
-            "actions_hand": actions_hand,
-            "actions_pose": actions_pose,
-            "state_robot": state_robot,
-            "state_hand": state_hand,
-            "state_pose": state_pose,
-            "rgb_static": frames,
-            "timestamps": timestamps,
+            "actions": actions,              # (window_size, 65)
+            "robot_obs": state,              # (window_size, 68)
+            "scene_obs": np.zeros((window_size, 24)),  # Placeholder
+            "rgb_static": frames["left"],    # List of left frames
+            "rgb_gripper": frames["right"],  # List of right frames
             "language": self.language_instruction
         }
     
     def _load_video_frames(self, video_filename, timestamps):
         """
-        Load video frames from SVO2 file based on timestamps.
-        
+        Load video frames (left and right) from SVO2 file based on timestamps using pyzed.
         Args:
             video_filename: Path to the SVO2 file
             timestamps: Array of timestamps to match
-            
         Returns:
-            List of frames as numpy arrays
+            Dictionary containing lists of left and right frames as numpy arrays:
+            {
+                "left": [left_frame_1, left_frame_2, ...],
+                "right": [right_frame_1, right_frame_2, ...]
+            }
         """
-        # Check if video is already cached
         if video_filename not in self.video_cache:
-            # Initialize OpenCV video capture
-            cap = cv2.VideoCapture(video_filename)
-            if not cap.isOpened():
-                raise ValueError(f"Could not open video file: {video_filename}")
+            zed = sl.Camera()
+            init_params = sl.InitParameters()
+            init_params.set_from_svo_file(video_filename)
+            init_params.svo_real_time_mode = False
             
-            # Read all frames and their timestamps
-            frame_data = []
+            err = zed.open(init_params)
+            if err != sl.ERROR_CODE.SUCCESS:
+                raise ValueError(f"Could not open SVO file: {video_filename}. Error: {err}")
+            
+            frame_count = zed.get_svo_number_of_frames()
+            left_frames = []
+            right_frames = []
             video_timestamps = []
             
-            success, frame = cap.read()
-            frame_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0  # Convert to seconds
+            left_image = sl.Mat()
+            right_image = sl.Mat()
             
-            while success:
-                frame_data.append(frame)
-                video_timestamps.append(frame_time)
-                
-                success, frame = cap.read()
-                if success:
-                    frame_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            for _ in range(frame_count):
+                if zed.grab() == sl.ERROR_CODE.SUCCESS:
+                    zed.retrieve_image(left_image, sl.VIEW.LEFT)
+                    zed.retrieve_image(right_image, sl.VIEW.RIGHT)
+                    left_frames.append(left_image.get_data())
+                    right_frames.append(right_image.get_data())
+                    video_timestamps.append(zed.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_milliseconds() / 1000.0)
             
-            cap.release()
-            
-            # Store in cache
-            self.video_cache[video_filename] = (np.array(frame_data), np.array(video_timestamps))
+            zed.close()
+            self.video_cache[video_filename] = {
+                "left": np.array(left_frames),
+                "right": np.array(right_frames),
+                "timestamps": np.array(video_timestamps)
+            }
         
-        # Get cached data
-        all_frames, video_timestamps = self.video_cache[video_filename]
+        cached_data = self.video_cache[video_filename]
+        all_left_frames = cached_data["left"]
+        all_right_frames = cached_data["right"]
+        video_timestamps = cached_data["timestamps"]
         
-        # Find closest frames to timestamps
-        selected_frames = []
+        selected_left_frames = []
+        selected_right_frames = []
         for ts in timestamps:
-            # Find index of closest timestamp
             closest_idx = np.argmin(np.abs(video_timestamps - ts))
-            selected_frames.append(all_frames[closest_idx])
+            # Convert from BGR to RGB
+            selected_left_frames.append(cv2.cvtColor(all_left_frames[closest_idx], cv2.COLOR_BGR2RGB))
+            selected_right_frames.append(cv2.cvtColor(all_right_frames[closest_idx], cv2.COLOR_BGR2RGB))
         
-        # Convert BGR to RGB and return
-        return [cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) for frame in selected_frames]
+        return {
+            "left": selected_left_frames,
+            "right": selected_right_frames
+        }
     
     def __len__(self):
         return len(self.episode_lookup)
     
     def __getitem__(self, idx):
-        """
-        Get a trajectory window from the dataset.
-        
-        Args:
-            idx: Index of the sequence
-            
-        Returns:
-            Loaded sequence with processed data
-        """
-        # Load episode data
         episode = self._load_episode(idx)
         
-        # Process data into the expected format
         sequence = {
-            # Keep all state dimensions
-            "robot_obs": torch.tensor(episode["state_robot"], dtype=torch.float32),
-            "hand_obs": torch.tensor(episode["state_hand"], dtype=torch.float32),
-            "pose_obs": torch.tensor(episode["state_pose"], dtype=torch.float32),
-            
-            # RGB observations
+            "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
             "rgb_obs": {
                 "rgb_static": [Image.fromarray(frame) for frame in episode["rgb_static"]],
+                "rgb_gripper": [Image.fromarray(frame) for frame in episode["rgb_gripper"]]
             },
-            
-            # Keep all action dimensions
-            "actions_robot": torch.tensor(episode["actions_robot"], dtype=torch.float32),
-            "actions_hand": torch.tensor(episode["actions_hand"], dtype=torch.float32),
-            "actions_pose": torch.tensor(episode["actions_pose"], dtype=torch.float32),
-            
-            # Additional info
-            "timestamps": torch.tensor(episode["timestamps"], dtype=torch.float32),
+            "depth_obs": {},
+            "actions": torch.tensor(episode["actions"], dtype=torch.float32),
+            "state_info": {
+                "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
+                "scene_obs": torch.tensor(episode["scene_obs"], dtype=torch.float32)
+            },
             "lang": episode["language"],
             "idx": idx
         }
         
-        # Pad if necessary
-        if self.pad:
-            pad_size = self.max_window_size - len(episode["timestamps"])
-            if pad_size > 0:
-                sequence = self._pad_sequence(sequence, pad_size)
+        if self.pad and len(episode["actions"]) < self.max_window_size:
+            pad_size = self.max_window_size - len(episode["actions"])
+            sequence = self._pad_sequence(sequence, pad_size)
         
         return sequence
     
     def _pad_sequence(self, seq, pad_size):
-        """
-        Pad a sequence by repeating the last frame.
-        
-        Args:
-            seq: Sequence to pad
-            pad_size: Number of frames to pad
-            
-        Returns:
-            Padded sequence
-        """
-        # Pad all tensor observations
-        for key in ["robot_obs", "hand_obs", "pose_obs", "timestamps"]:
-            seq[key] = self._pad_with_repetition(seq[key], pad_size)
-        
-        # Pad RGB observations
+        seq["robot_obs"] = self._pad_with_repetition(seq["robot_obs"], pad_size)
         for key in seq["rgb_obs"]:
-            # For images, repeat the last image
             last_img = seq["rgb_obs"][key][-1]
             seq["rgb_obs"][key].extend([last_img] * pad_size)
         
-        # Pad all action types
-        for key in ["actions_robot", "actions_hand", "actions_pose"]:
-            seq[key] = self._pad_with_repetition(seq[key], pad_size)
+        # Pad actions with zeros (assuming relative actions, adjust if absolute)
+        actions = seq["actions"]
+        pad_actions = torch.zeros((pad_size, actions.shape[1]), dtype=actions.dtype)
+        seq["actions"] = torch.cat([actions, pad_actions], dim=0)
+        
+        for key in seq["state_info"]:
+            seq["state_info"][key] = self._pad_with_repetition(seq["state_info"][key], pad_size)
         
         return seq
     
     @staticmethod
     def _pad_with_repetition(input_tensor, pad_size):
-        """
-        Pad a sequence Tensor by repeating last element pad_size times.
-        
-        Args:
-            input_tensor: Sequence to pad
-            pad_size: Number of frames to pad
-            
-        Returns:
-            Padded Tensor
-        """
         last_repeated = torch.repeat_interleave(
             torch.unsqueeze(input_tensor[-1], dim=0), repeats=pad_size, dim=0
         )
-        padded = torch.vstack((input_tensor, last_repeated))
-        return padded
+        return torch.vstack((input_tensor, last_repeated))
     
     def collator(self, sample):
-        """
-        Collate function for the dataloader.
+        action_tensors = torch.stack([s["actions"] for s in sample])    # (batch, window_size, 65)
+        state_tensors = torch.stack([s["robot_obs"] for s in sample])  # (batch, window_size, 68)
         
-        Args:
-            sample: List of samples from __getitem__
-            
-        Returns:
-            Batch of processed data
-        """
-        # Stack all action and state tensors
-        actions_robot = torch.stack([s["actions_robot"] for s in sample])
-        actions_hand = torch.stack([s["actions_hand"] for s in sample])
-        actions_pose = torch.stack([s["actions_pose"] for s in sample])
-        
-        robot_obs = torch.stack([s["robot_obs"] for s in sample])
-        hand_obs = torch.stack([s["hand_obs"] for s in sample])
-        pose_obs = torch.stack([s["pose_obs"] for s in sample])
-        
-        # Process images with image_fn
         image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_static"]) for s in sample])
+        gripper_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_gripper"]) for s in sample])
         
-        # Process text with text_fn
         stacked_language = [s["lang"] for s in sample]
         text_tensors = self.text_fn(stacked_language)
         
-        # Apply image augmentations if needed
+        # Handle augmentations (unchanged)
         if self.rgb_pad != -1:
             bs, seq_len = image_tensors.shape[:2]
             if self.traj_cons:
-                # Apply trajectory-consistent augmentation
                 image_tensors = self.rgb_shift.forward_traj(image_tensors)
             else:
-                # Apply independent augmentation to each frame
-                image_tensors = image_tensors.view(bs*seq_len, *image_tensors.shape[2:])
+                image_tensors = image_tensors.view(bs * seq_len, *image_tensors.shape[2:])
                 image_tensors = self.rgb_shift(image_tensors)
                 image_tensors = image_tensors.view(bs, seq_len, *image_tensors.shape[1:])
         
-        # Handle multi-step actions if needed
-        if self.act_step != 1:
-            # Process robot actions
-            robot_actions = torch.zeros((actions_robot.shape[0], self.window_size, self.act_step, actions_robot.shape[-1]))
-            for b in range(actions_robot.shape[0]):
-                for ix in range(self.window_size):
-                    robot_actions[b, ix] = actions_robot[b, ix:ix+self.act_step]
-            
-            # Process hand actions
-            hand_actions = torch.zeros((actions_hand.shape[0], self.window_size, self.act_step, actions_hand.shape[-1]))
-            for b in range(actions_hand.shape[0]):
-                for ix in range(self.window_size):
-                    hand_actions[b, ix] = actions_hand[b, ix:ix+self.act_step]
-            
-            # Process pose actions
-            pose_actions = torch.zeros((actions_pose.shape[0], self.window_size, self.act_step, actions_pose.shape[-1]))
-            for b in range(actions_pose.shape[0]):
-                for ix in range(self.window_size):
-                    pose_actions[b, ix] = actions_pose[b, ix:ix+self.act_step]
-            
-            # Process robot observations for multi-step
-            robot_multi_obs = torch.zeros((robot_obs.shape[0], self.window_size, self.act_step, robot_obs.shape[-1]))
-            for b in range(robot_obs.shape[0]):
-                for ix in range(self.window_size):
-                    robot_multi_obs[b, ix] = robot_obs[b, ix:ix+self.act_step]
-            
-            # Process hand observations for multi-step
-            hand_multi_obs = torch.zeros((hand_obs.shape[0], self.window_size, self.act_step, hand_obs.shape[-1]))
-            for b in range(hand_obs.shape[0]):
-                for ix in range(self.window_size):
-                    hand_multi_obs[b, ix] = hand_obs[b, ix:ix+self.act_step]
-            
-            # Process pose observations for multi-step
-            pose_multi_obs = torch.zeros((pose_obs.shape[0], self.window_size, self.act_step, pose_obs.shape[-1]))
-            for b in range(pose_obs.shape[0]):
-                for ix in range(self.window_size):
-                    pose_multi_obs[b, ix] = pose_obs[b, ix:ix+self.act_step]
-            
-            # Update actions and observations
-            actions_robot = robot_actions
-            actions_hand = hand_actions
-            actions_pose = pose_actions
-            
-            # Adjust sequence lengths for image tensors
-            image_tensors = image_tensors[:, :-(self.act_step-1)]
-            
-            # Adjust sequence lengths for state tensors
-            robot_obs = robot_obs[:, :-(self.act_step-1)]
-            hand_obs = hand_obs[:, :-(self.act_step-1)]
-            pose_obs = pose_obs[:, :-(self.act_step-1)]
-        else:
-            # For single-step actions, set multi_obs to empty tensors
-            robot_multi_obs = torch.zeros(1)
-            hand_multi_obs = torch.zeros(1)
-            pose_multi_obs = torch.zeros(1)
+        if self.gripper_pad != -1:
+            bs, seq_len = gripper_tensors.shape[:2]
+            if self.traj_cons:
+                gripper_tensors = self.gripper_shift.forward_traj(gripper_tensors)
+            else:
+                gripper_tensors = gripper_tensors.view(bs * seq_len, *gripper_tensors.shape[2:])
+                gripper_tensors = self.gripper_shift(gripper_tensors)
+                gripper_tensors = gripper_tensors.view(bs, seq_len, *gripper_tensors.shape[1:])
         
-        return (
-            image_tensors,                # RGB images
-            text_tensors,                 # Text instructions
-            actions_robot,                # Robot actions
-            actions_hand,                 # Hand actions
-            actions_pose,                 # Pose actions
-            robot_obs,                    # Robot state
-            hand_obs,                     # Hand state
-            pose_obs,                     # Pose state
-            robot_multi_obs,              # Multi-step robot observations (if applicable)
-            hand_multi_obs,               # Multi-step hand observations (if applicable)
-            pose_multi_obs                # Multi-step pose observations (if applicable)
-        )
+        robot_obs = torch.zeros(1)
+        
+        if self.act_step != 1:
+            actions = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, action_tensors.shape[-1]))
+            for b in range(action_tensors.shape[0]):
+                for ix in range(self.window_size):
+                    actions[b, ix] = action_tensors[b, ix:ix+self.act_step]
+            
+            robot_obs = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, state_tensors.shape[-1]))
+            for b in range(action_tensors.shape[0]):
+                for ix in range(self.window_size):
+                    robot_obs[b, ix] = state_tensors[b, ix:ix+self.act_step]
+            
+            action_tensors = actions
+            image_tensors = image_tensors[:, :-(self.act_step-1)]
+            gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
+            state_tensors = state_tensors[:, :-(self.act_step-1)]
+        
+        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
 def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validation=False):
     """
@@ -3955,7 +3816,7 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     )
     
     # Determine dataset directory
-    dataset_dir = args.pick_bottle_dataset
+    dataset_dir = args.calvin_dataset
     if validation:
         dataset_dir = os.path.join(dataset_dir, "validation")
     else:
@@ -3978,9 +3839,10 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     )
     
     # Calculate batching details
-    round_fn = math.floor if args.floor else math.ceil
+    round_fn = math.floor if "floor" in args else math.ceil
     num_samples = len(dataset)
-    global_batch_size = args.batch_size * args.world_size
+    world_size = args.world_size if "world_size" in args else 1
+    global_batch_size = args.batch_size * world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
     num_worker_batches = round_fn(num_batches / num_workers)
@@ -3990,8 +3852,8 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     # Create sampler for distributed training
     sampler = DistributedSampler(
         dataset,
-        num_replicas=args.world_size,
-        rank=args.rank,
+        num_replicas=world_size,
+        rank=args.rank if "rank" in args else 0,
         shuffle=not validation,
         seed=args.seed,
         drop_last=True,
@@ -4017,18 +3879,20 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
 
 
 if __name__ == "__main__":
-    from arguments_utils import get_args_and_cfg
+    from arguments_utils import get_parser
     from tqdm import tqdm
-    args, _ = get_args_and_cfg()
+    parser = get_parser()
+    args = parser.parse_args()
     device='cuda'
     model, image_processor = clip.load("ViT-B/32", device=device)
     pick_bottle_dataset = get_pick_bottle_dataset(args, image_processor, clip, epoch=0)
     pick_bottle_dataset.set_epoch(epoch=0)
     pick_bottle_loader = pick_bottle_dataset.dataloader
     num_batches_per_epoch = pick_bottle_loader.num_batches
+    rank = args.rank if "rank" in args else 0
     t = tqdm(
         enumerate(pick_bottle_loader),
-        disable=args.rank != 0,
+        disable=rank != 0,
         total=num_batches_per_epoch,
     )
     t1 = time.time()
@@ -4040,4 +3904,3 @@ if __name__ == "__main__":
             print("t2 - t1", t2 - t1)
         torch.cuda.synchronize()
         t1 = time.time()
-
