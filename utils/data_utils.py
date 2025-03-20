@@ -54,6 +54,8 @@ import h5py
 from scipy.spatial.transform import Rotation as R
 import time
 import pyzed.sl as sl
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import decord
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 MAX_NUM_TOKENS = 256
@@ -3552,10 +3554,18 @@ class PickBottleDataset(Dataset):
         self.window_size = window_size
         self.act_step = act_step
         self.pad = pad
+        
+        if not dif_ws:
+            self.min_window_size = window_size + act_step - 1
+            self.max_window_size = window_size + act_step - 1
+        else:
+            self.min_window_size = min_window_size
+            self.max_window_size = max_window_size
         self.validation = validation
         self.rgb_pad = rgb_pad
         self.gripper_pad = gripper_pad
         self.traj_cons = traj_cons
+        self.rgb_shift = RandomShiftsAug(rgb_pad)
         
         if not dif_ws:
             self.min_window_size = window_size + act_step - 1
@@ -3621,9 +3631,8 @@ class PickBottleDataset(Dataset):
         return {
             "actions": actions,              # (window_size, 65)
             "robot_obs": state,              # (window_size, 68)
-            "scene_obs": np.zeros((window_size, 24)),  # Placeholder
-            "rgb_static": frames["left"],    # List of left frames
-            "rgb_gripper": frames["right"],  # List of right frames
+            "rgb_left": frames["left"],    # List of left frames
+            "rgb_right": frames["right"],  # List of right frames
             "language": self.language_instruction
         }
     
@@ -3640,52 +3649,85 @@ class PickBottleDataset(Dataset):
                 "right": [right_frame_1, right_frame_2, ...]
             }
         """
-        if video_filename not in self.video_cache:
-            zed = sl.Camera()
-            init_params = sl.InitParameters()
-            init_params.set_from_svo_file(video_filename)
-            init_params.svo_real_time_mode = False
-            
-            err = zed.open(init_params)
-            if err != sl.ERROR_CODE.SUCCESS:
-                raise ValueError(f"Could not open SVO file: {video_filename}. Error: {err}")
-            
-            frame_count = zed.get_svo_number_of_frames()
-            left_frames = []
-            right_frames = []
-            video_timestamps = []
-            
-            left_image = sl.Mat()
-            right_image = sl.Mat()
-            
-            for _ in range(frame_count):
-                if zed.grab() == sl.ERROR_CODE.SUCCESS:
-                    zed.retrieve_image(left_image, sl.VIEW.LEFT)
-                    zed.retrieve_image(right_image, sl.VIEW.RIGHT)
-                    left_frames.append(left_image.get_data())
-                    right_frames.append(right_image.get_data())
-                    video_timestamps.append(zed.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_milliseconds() / 1000.0)
-            
-            zed.close()
-            self.video_cache[video_filename] = {
-                "left": np.array(left_frames),
-                "right": np.array(right_frames),
-                "timestamps": np.array(video_timestamps)
-            }
+        # video_cache = {}
+        # if video_filename not in video_cache:
+        #     left_video_name = video_filename[:-5] + '_left.mp4'
+        #     right_video_name = video_filename[:-5] + '_right.mp4'
+        #     time_stamps_name = video_filename[:-5] + '_time_stamps.npy'
+
+        #     cap = cv2.VideoCapture(left_video_name)
+        #     left_imgs = []
+        #     frame_count = 0
+        #     while True:
+        #         ret, frame = cap.read()
+        #         if not ret:
+        #             break
+        #         left_imgs.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        #         frame_count += 1
+        #     left_imgs = np.array(left_imgs, dtype=np.uint8)
+
+        #     cap = cv2.VideoCapture(right_video_name)
+        #     right_imgs = []
+        #     frame_count = 0
+        #     while True:
+        #         ret, frame = cap.read()
+        #         if not ret:
+        #             break
+        #         right_imgs.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        #         frame_count += 1
+        #     right_imgs = np.array(right_imgs, dtype=np.uint8)
+
+        #     time_stamps = np.load(time_stamps_name)
+
+        #     video_cache[video_filename] = {
+        #         "left": left_imgs,
+        #         "right": right_imgs,
+        #         "timestamps": time_stamps
+        #     }
         
-        cached_data = self.video_cache[video_filename]
-        all_left_frames = cached_data["left"]
-        all_right_frames = cached_data["right"]
-        video_timestamps = cached_data["timestamps"]
+        # cached_data = video_cache[video_filename]
+        # all_left_frames = cached_data["left"]
+        # all_right_frames = cached_data["right"]
+        # video_timestamps = cached_data["timestamps"]
         
-        selected_left_frames = []
-        selected_right_frames = []
+        # selected_left_frames = []
+        # selected_right_frames = []
+        # for ts in timestamps:
+        #     closest_idx = np.argmin(np.abs(video_timestamps - ts))
+        #     selected_left_frames.append(all_left_frames[closest_idx])
+        #     selected_right_frames.append(all_right_frames[closest_idx])
+        
+        # return {
+        #     "left": np.array(selected_left_frames),
+        #     "right": np.array(selected_right_frames)
+        # }
+            # Derive filenames from the SVO2 file path
+        left_video_name = video_filename[:-5] + '_left.mp4'
+        right_video_name = video_filename[:-5] + '_right.mp4'
+        time_stamps_name = video_filename[:-5] + '_time_stamps.npy'
+        
+        # Load timestamps first
+        video_timestamps = np.load(time_stamps_name)
+        
+        # Find the indices of frames that are closest to the requested timestamps
+        selected_indices = []
         for ts in timestamps:
             closest_idx = np.argmin(np.abs(video_timestamps - ts))
-            # Convert from BGR to RGB
-            selected_left_frames.append(cv2.cvtColor(all_left_frames[closest_idx], cv2.COLOR_BGR2RGB))
-            selected_right_frames.append(cv2.cvtColor(all_right_frames[closest_idx], cv2.COLOR_BGR2RGB))
+            selected_indices.append(closest_idx)
         
+        # Load only the needed frames from left video
+        left_vr = decord.VideoReader(left_video_name)
+        selected_left_frames = left_vr.get_batch(selected_indices).asnumpy()
+        
+        # Load only the needed frames from right video
+        right_vr = decord.VideoReader(right_video_name)
+        selected_right_frames = right_vr.get_batch(selected_indices).asnumpy()
+        
+        # Convert from BGR to RGB if needed (Decord returns frames in RGB by default)
+        # If you need BGR to RGB conversion, uncomment these lines:
+        # selected_left_frames = selected_left_frames[:, :, :, ::-1]  
+        # selected_right_frames = selected_right_frames[:, :, :, ::-1]
+
         return {
             "left": selected_left_frames,
             "right": selected_right_frames
@@ -3700,15 +3742,10 @@ class PickBottleDataset(Dataset):
         sequence = {
             "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
             "rgb_obs": {
-                "rgb_static": [Image.fromarray(frame) for frame in episode["rgb_static"]],
-                "rgb_gripper": [Image.fromarray(frame) for frame in episode["rgb_gripper"]]
+                "rgb_left": [Image.fromarray(frame) for frame in episode["rgb_left"]],
+                "rgb_right": [Image.fromarray(frame) for frame in episode["rgb_right"]]
             },
-            "depth_obs": {},
             "actions": torch.tensor(episode["actions"], dtype=torch.float32),
-            "state_info": {
-                "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
-                "scene_obs": torch.tensor(episode["scene_obs"], dtype=torch.float32)
-            },
             "lang": episode["language"],
             "idx": idx
         }
@@ -3745,31 +3782,26 @@ class PickBottleDataset(Dataset):
     def collator(self, sample):
         action_tensors = torch.stack([s["actions"] for s in sample])    # (batch, window_size, 65)
         state_tensors = torch.stack([s["robot_obs"] for s in sample])  # (batch, window_size, 68)
-        
-        image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_static"]) for s in sample])
-        gripper_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_gripper"]) for s in sample])
+
+        left_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_left"]) for s in sample])  # (batch, window_size, 3, 224, 224)
+        right_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_right"]) for s in sample])  # (batch, window_size, 3, 224, 224)
         
         stacked_language = [s["lang"] for s in sample]
         text_tensors = self.text_fn(stacked_language)
         
         # Handle augmentations (unchanged)
         if self.rgb_pad != -1:
-            bs, seq_len = image_tensors.shape[:2]
+            bs, seq_len = left_image_tensors.shape[:2]
             if self.traj_cons:
-                image_tensors = self.rgb_shift.forward_traj(image_tensors)
+                left_image_tensors = self.rgb_shift.forward_traj(left_image_tensors)
+                right_image_tensors = self.rgb_shift.forward_traj(right_image_tensors)
             else:
-                image_tensors = image_tensors.view(bs * seq_len, *image_tensors.shape[2:])
-                image_tensors = self.rgb_shift(image_tensors)
-                image_tensors = image_tensors.view(bs, seq_len, *image_tensors.shape[1:])
-        
-        if self.gripper_pad != -1:
-            bs, seq_len = gripper_tensors.shape[:2]
-            if self.traj_cons:
-                gripper_tensors = self.gripper_shift.forward_traj(gripper_tensors)
-            else:
-                gripper_tensors = gripper_tensors.view(bs * seq_len, *gripper_tensors.shape[2:])
-                gripper_tensors = self.gripper_shift(gripper_tensors)
-                gripper_tensors = gripper_tensors.view(bs, seq_len, *gripper_tensors.shape[1:])
+                left_image_tensors = left_image_tensors.view(bs * seq_len, *left_image_tensors.shape[2:])
+                left_image_tensors = self.rgb_shift(left_image_tensors)
+                left_image_tensors = left_image_tensors.view(bs, seq_len, *left_image_tensors.shape[1:])
+                right_image_tensors = right_image_tensors.view(bs * seq_len, *right_image_tensors.shape[2:])
+                right_image_tensors = self.rgb_shift(right_image_tensors)
+                right_image_tensors = right_image_tensors.view(bs, seq_len, *right_image_tensors.shape[1:])
         
         robot_obs = torch.zeros(1)
         
@@ -3785,11 +3817,11 @@ class PickBottleDataset(Dataset):
                     robot_obs[b, ix] = state_tensors[b, ix:ix+self.act_step]
             
             action_tensors = actions
-            image_tensors = image_tensors[:, :-(self.act_step-1)]
-            gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
+            left_image_tensors = left_image_tensors[:, :-(self.act_step-1)]
+            right_image_tensors = right_image_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
         
-        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
+        return left_image_tensors, text_tensors, action_tensors, right_image_tensors, state_tensors, robot_obs
 
 def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validation=False):
     """
@@ -3898,6 +3930,11 @@ if __name__ == "__main__":
     t1 = time.time()
     mv_avg_loss = []
     for num_steps, batch in t:
+        # image_primary: torch.Size([16, 10, 3, 224, 224])
+        # image_wrist: torch.Size([16, 10, 3, 224, 224])
+        # state: torch.Size([16, 10, 68])
+        # text_token: torch.Size([16, 77])
+        # action: torch.Size([16, 10, 65])
         if num_steps > 0:
             torch.cuda.synchronize()
             t2 = time.time()
