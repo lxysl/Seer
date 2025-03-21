@@ -187,6 +187,10 @@ def get_parser(is_eval=False):
     # loss
     parser.add_argument("--loss_arm_action_ratio", type=float, default=1.0)
     parser.add_argument("--loss_gripper_action_ratio", type=float, default=0.01)   
+    parser.add_argument("--loss_hand_action_ratio", type=float, default=1.0)
+    parser.add_argument("--loss_pose_action_ratio", type=float, default=1.0)
+    parser.add_argument("--loss_robot_action_ratio", type=float, default=1.0)
+    parser.add_argument("--loss_image_ratio", type=float, default=0.1)
     # action_pred_steps
     parser.add_argument("--action_pred_steps", type=int, default=1)
     # obs_pred

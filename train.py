@@ -13,10 +13,10 @@ from transformers import (
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
-from models.seer_model import SeerAgent
-from utils.train_utils import get_checkpoint, train_one_epoch_calvin, get_ckpt_name
+from models.my_seer_model import SeerAgent
+from utils.my_train_utils import get_checkpoint, train_one_epoch_calvin, get_ckpt_name
 from utils.arguments_utils import get_parser
-from utils.data_utils import get_calvin_dataset, get_calvin_val_dataset, get_droid_dataset, get_libero_pretrain_dataset, get_libero_finetune_dataset, get_real_finetune_dataset, get_oxe_dataset
+from utils.data_utils import get_calvin_dataset, get_calvin_val_dataset, get_droid_dataset, get_libero_pretrain_dataset, get_libero_finetune_dataset, get_real_finetune_dataset, get_oxe_dataset, get_pick_bottle_dataset
 from utils.distributed_utils import init_distributed_device, world_info_from_env  
 
 
@@ -84,6 +84,8 @@ def main(args):
         calvin_dataset = get_real_finetune_dataset(args, model.image_processor, clip, epoch=0)
     elif args.finetune_type == "oxe":
         calvin_dataset = get_oxe_dataset(args, model.image_processor, clip, epoch=0)
+    elif args.finetune_type == "bottle":
+        calvin_dataset = get_pick_bottle_dataset(args, model.image_processor, clip, epoch=0)
     random_seed(args.seed, args.rank)
     print(f"Start running training on rank {args.rank}.")
     if args.rank == 0 and args.report_to_wandb:

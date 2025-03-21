@@ -153,23 +153,42 @@ class SeerAgent(nn.Module):
         self.hidden_dim = hidden_dim
         self.phase = phase
         assert self.phase in ["pretrain", "finetune", "evaluate"]
-        self.gripper_width = gripper_width
         self.vit_checkpoint_path = vit_checkpoint_path
 
         # text projector
         self.text_projector = nn.Linear(512, self.hidden_dim)        
 
-        # state encoder
-        ARM_STATE_FEATURE_DIM = self.hidden_dim 
-        GRIPPER_STATE_FEATURE_DIM = self.hidden_dim
-        self.arm_state_encoder = nn.Linear(6, ARM_STATE_FEATURE_DIM)
-        self.gripper_state_encoder = nn.Linear(2, GRIPPER_STATE_FEATURE_DIM)
-        self.state_projector = nn.Linear(ARM_STATE_FEATURE_DIM + GRIPPER_STATE_FEATURE_DIM, self.hidden_dim)
+        # ==== STATE ENCODER (MODIFIED) ====
+        # New state encoders for hand, pose, robot
+        HAND_STATE_FEATURE_DIM = self.hidden_dim
+        POSE_STATE_FEATURE_DIM = self.hidden_dim
+        ROBOT_STATE_FEATURE_DIM = self.hidden_dim
+        
+        self.hand_state_encoder = nn.Linear(12, HAND_STATE_FEATURE_DIM)
+        self.pose_state_encoder = nn.Linear(27, POSE_STATE_FEATURE_DIM)
+        self.robot_state_encoder = nn.Linear(29, ROBOT_STATE_FEATURE_DIM)
+        
+        # Combined state projector
+        self.state_projector = nn.Linear(
+            HAND_STATE_FEATURE_DIM + POSE_STATE_FEATURE_DIM + ROBOT_STATE_FEATURE_DIM, 
+            self.hidden_dim
+        )
 
-        # action encoder
-        self.action_pose_encoder = nn.Linear(6, ARM_STATE_FEATURE_DIM)
-        self.action_gripper_position_encoder = nn.Linear(2, GRIPPER_STATE_FEATURE_DIM)
-        self.action_projector = nn.Linear(ARM_STATE_FEATURE_DIM + GRIPPER_STATE_FEATURE_DIM, self.hidden_dim)
+        # ==== ACTION ENCODER (MODIFIED) ====
+        # New action encoders for hand, pose, robot
+        HAND_ACTION_FEATURE_DIM = self.hidden_dim
+        POSE_ACTION_FEATURE_DIM = self.hidden_dim
+        ROBOT_ACTION_FEATURE_DIM = self.hidden_dim
+        
+        self.action_hand_encoder = nn.Linear(12, HAND_ACTION_FEATURE_DIM)
+        self.action_pose_encoder = nn.Linear(24, POSE_ACTION_FEATURE_DIM)
+        self.action_robot_encoder = nn.Linear(29, ROBOT_ACTION_FEATURE_DIM)
+        
+        # Combined action projector
+        self.action_projector = nn.Linear(
+            HAND_ACTION_FEATURE_DIM + POSE_ACTION_FEATURE_DIM + ROBOT_ACTION_FEATURE_DIM, 
+            self.hidden_dim
+        )
 
         # vision encoder (frozen)
         self.vision_encoder = MaskedAutoencoderViT(
@@ -182,10 +201,11 @@ class SeerAgent(nn.Module):
         self.RESAMPLER_hidden_dim = 768  
         self.NUM_RESAMPLER_QUERY = num_resampler_query
         self.perceiver_resampler = PerceiverResampler(dim=self.RESAMPLER_hidden_dim, num_latents=self.NUM_RESAMPLER_QUERY, depth=3)
-        self.image_primary_projector = nn.Linear(self.RESAMPLER_hidden_dim, self.hidden_dim)
-        self.cls_token_primary_projector = nn.Linear(768, self.hidden_dim)
-        self.image_wrist_projector = nn.Linear(self.RESAMPLER_hidden_dim, self.hidden_dim)
-        self.cls_token_wrist_projector = nn.Linear(768, self.hidden_dim)
+        
+        self.image_left_projector = nn.Linear(self.RESAMPLER_hidden_dim, self.hidden_dim)
+        self.cls_token_left_projector = nn.Linear(768, self.hidden_dim)
+        self.image_right_projector = nn.Linear(self.RESAMPLER_hidden_dim, self.hidden_dim)
+        self.cls_token_right_projector = nn.Linear(768, self.hidden_dim)
 
         # action_pred_token
         if self.action_pred_steps > 0:
@@ -217,7 +237,7 @@ class SeerAgent(nn.Module):
                                     action_pred_steps=self.action_pred_steps), 
                                     requires_grad=False)
         num_non_learnable_token_per_timestep = 1+1+self.NUM_RESAMPLER_QUERY*2+1*2
-        self.transformer_backbone_position_embedding = nn.Parameter(torch.zeros(1, self.sequence_length, 1, self.hidden_dim), requires_grad=True)  # TODO How to initialize this embedding
+        self.transformer_backbone_position_embedding = nn.Parameter(torch.zeros(1, self.sequence_length, 1, self.hidden_dim), requires_grad=True)
         config = GPT2Config()
         config.hidden_size = self.hidden_dim
         config.n_layer = transformer_layers
@@ -225,7 +245,7 @@ class SeerAgent(nn.Module):
         config.n_head = transformer_heads
         self.transformer_backbone = GPT2Model(config)
 
-        # action decoder
+        # ==== ACTION DECODER (MODIFIED) ====
         MLP_hidden_dim = self.hidden_dim // 2
         self.action_decoder = nn.Sequential(
             nn.Linear(self.hidden_dim, MLP_hidden_dim),
@@ -233,30 +253,48 @@ class SeerAgent(nn.Module):
             nn.Linear(MLP_hidden_dim, MLP_hidden_dim),
             nn.ReLU(),
         )
-        self.arm_action_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 6),
-            torch.nn.Tanh(),
+        
+        # New decoders for hand, pose, robot
+        self.hand_action_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 12),
+            # torch.nn.Tanh(),
         )
-        self.gripper_action_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 1),
-            torch.nn.Sigmoid(),
+        
+        self.pose_action_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 24),
+            # torch.nn.Tanh(),
+        )
+        
+        self.robot_action_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 29),
+            # torch.nn.Tanh(),
         )
 
+        # ==== STATE RECONSTRUCTION DECODER (MODIFIED) ====
         self.recon_state_decoder = nn.Sequential(
             nn.Linear(self.hidden_dim, MLP_hidden_dim),
             nn.ReLU(),
             nn.Linear(MLP_hidden_dim, MLP_hidden_dim),
             nn.ReLU(),
         ) # not used
-        self.recon_arm_state_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 6),
-            torch.nn.Tanh(),
+        
+        # New state reconstruction decoders
+        self.recon_hand_state_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 12),
+            # torch.nn.Tanh(),
         ) # not used
-        self.recon_gripper_state_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 1),
-            torch.nn.Sigmoid(),
+        
+        self.recon_pose_state_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 27),
+            # torch.nn.Tanh(),
+        ) # not used
+        
+        self.recon_robot_state_decoder = nn.Sequential(
+            nn.Linear(MLP_hidden_dim, 29),
+            # torch.nn.Tanh(),
         ) # not used
 
+        # Image decoder components
         self.IMAGE_DECODER_hidden_dim = self.hidden_dim
         self.NUM_MASK_TOKEN = int(calvin_input_image_size**2 / patch_size / patch_size)  # i.e. num_patch
         self.PATCH_SIZE = patch_size
@@ -277,7 +315,7 @@ class SeerAgent(nn.Module):
         vit_checkpoint = torch.load(self.vit_checkpoint_path, map_location='cpu')
         msg = self.vision_encoder.load_state_dict(vit_checkpoint['model'], strict=False)
 
-        # # freeze text encoder
+        # freeze text encoder
         if os.path.exists("checkpoints/clip/ViT-B-32.pt"):
             self.clip_model, self.image_processor = clip.load("checkpoints/clip/ViT-B-32.pt", device=clip_device)
         else:
@@ -311,8 +349,23 @@ class SeerAgent(nn.Module):
         self.transformer_backbone_type = next(self.transformer_backbone.parameters()).type()
         self.action_decoder_type = next(self.action_decoder.parameters()).type()
 
-
-    def forward(self, image_primary, image_wrist, state, text_token, action=None):  
+    def forward(self, image_left, image_right, state, text_token, action=None):  
+        """
+        Modified forward pass to handle new input structure
+        
+        Args:
+            image_left: Left camera image, shape [B, S, C, H, W]
+            image_right: Right camera image, shape [B, S, C, H, W]
+            state: State tensor containing hand, pose, robot parts 
+                   [B, S, hand_dim(12) + pose_dim(27) + robot_dim(29)]
+            text_token: Text tokens from CLIP, shape [B, S, token_length]
+            action: Optional action tensor containing hand, pose, robot parts
+                    [B, S, hand_dim(12) + pose_dim(24) + robot_dim(29)]
+                    
+        Returns:
+            Predicted hand_action, pose_action, robot_action, image reconstruction,
+            and optionally predicted states and loss
+        """
         if self.training and self.phase == "pretrain":
             if self.obs_pred:
                 this_num_obs_token = self.NUM_OBS_TOKEN
@@ -331,13 +384,14 @@ class SeerAgent(nn.Module):
                             num_obs_token=this_num_obs_token,
                             action_pred_steps=self.action_pred_steps).to(self.device), 
                             requires_grad=False)
+                            
         B, S, _ = state.shape
-        device = image_primary.device
-        S_AND_FUTURE = image_primary.shape[1]
+        device = image_left.device
+        S_AND_FUTURE = image_left.shape[1]
         image_pred = None
-        arm_pred_action, gripper_pred_action = None, None 
-        arm_pred_state, gripper_pred_state = None, None
-        loss_arm_action = None
+        hand_pred_action, pose_pred_action, robot_pred_action = None, None, None
+        hand_pred_state, pose_pred_state, robot_pred_state = None, None, None
+        loss_action = None
         
         # text embedding
         with torch.no_grad():
@@ -346,45 +400,62 @@ class SeerAgent(nn.Module):
         text_embedding = self.text_projector(text_feature)
         text_embedding = text_embedding.view(B, S, -1, self.hidden_dim) 
 
-        # state embedding
-        state = state.flatten(0, 1)
-        arm_state_feature = self.arm_state_encoder(state[:, :6])
-        if not self.gripper_width:
-            gripper_state_one_hot = torch.nn.functional.one_hot(torch.where(state[:, 6:].flatten() < 1, torch.tensor(0).to(device), torch.tensor(1).to(device)), num_classes=2)
-            gripper_state_feature = self.gripper_state_encoder(gripper_state_one_hot.type_as(state))
-        else:
-            gripper_state_feature = self.gripper_state_encoder(state[:, 6:])
-        state_embedding = self.state_projector(torch.cat((arm_state_feature, gripper_state_feature), dim=1))
-        state_embedding = state_embedding.view(B, S, -1, self.hidden_dim) 
+        # ==== STATE EMBEDDING (MODIFIED) ====
+        state = state.flatten(0, 1)  # [B*S, state_dim]
+        
+        # Extract components from state
+        # Assuming state is concatenated in order: [hand(12), pose(27), robot(29)]
+        hand_state = state[:, :12]
+        pose_state = state[:, 12:12+27]
+        robot_state = state[:, 12+27:12+27+29]
+        
+        # Encode each component
+        hand_state_feature = self.hand_state_encoder(hand_state)
+        pose_state_feature = self.pose_state_encoder(pose_state)
+        robot_state_feature = self.robot_state_encoder(robot_state)
+        
+        # Combine and project state features
+        state_embedding = self.state_projector(
+            torch.cat((hand_state_feature, pose_state_feature, robot_state_feature), dim=1)
+        )
+        state_embedding = state_embedding.view(B, S, -1, self.hidden_dim)
 
-        # image feature 
-        if image_primary.type() != self.vision_encoder_type:
-            image_primary = image_primary.type(self.vision_encoder_type)
-            image_wrist = image_wrist.type(self.vision_encoder_type)
+        # ==== IMAGE FEATURE EXTRACTION (RENAMED variables from primary/wrist to left/right) ====
+        if image_left.type() != self.vision_encoder_type:
+            image_left = image_left.type(self.vision_encoder_type)
+            image_right = image_right.type(self.vision_encoder_type)
+            
         with torch.no_grad():
-            image_primary_feature, _, _ = self.vision_encoder.forward_encoder(image_primary.flatten(0, 1), mask_ratio=0.0)
-            image_wrist_feature, _, _ = self.vision_encoder.forward_encoder(image_wrist.flatten(0, 1), mask_ratio=0.0)
-        if image_primary_feature.type() != self.perceiver_resampler_type:
-            image_primary_feature = image_primary_feature.type(self.perceiver_resampler_type)
-            image_wrist_feature = image_wrist_feature.type(self.perceiver_resampler_type)
-        image_primary_feature = image_primary_feature.view(B, S_AND_FUTURE, image_primary_feature.shape[-2], image_primary_feature.shape[-1])
-        image_wrist_feature = image_wrist_feature.view(B, S_AND_FUTURE, image_wrist_feature.shape[-2], image_wrist_feature.shape[-1])
-        image_primary_cls_token = image_primary_feature[:, :, :1, :]
-        image_wrist_cls_token = image_wrist_feature[:, :, :1, :]
-        image_primary_feature = image_primary_feature[:, :, 1:, :]
-        image_wrist_feature = image_wrist_feature[:, :, 1:, :]
-        label_image_primary_feature = image_primary_feature.clone()
-        label_image_wrist_feature = image_wrist_feature.clone()
+            image_left_feature, _, _ = self.vision_encoder.forward_encoder(image_left.flatten(0, 1), mask_ratio=0.0)
+            image_right_feature, _, _ = self.vision_encoder.forward_encoder(image_right.flatten(0, 1), mask_ratio=0.0)
+            
+        if image_left_feature.type() != self.perceiver_resampler_type:
+            image_left_feature = image_left_feature.type(self.perceiver_resampler_type)
+            image_right_feature = image_right_feature.type(self.perceiver_resampler_type)
+            
+        image_left_feature = image_left_feature.view(B, S_AND_FUTURE, image_left_feature.shape[-2], image_left_feature.shape[-1])
+        image_right_feature = image_right_feature.view(B, S_AND_FUTURE, image_right_feature.shape[-2], image_right_feature.shape[-1])
+        
+        image_left_cls_token = image_left_feature[:, :, :1, :]
+        image_right_cls_token = image_right_feature[:, :, :1, :]
+        image_left_feature = image_left_feature[:, :, 1:, :]
+        image_right_feature = image_right_feature[:, :, 1:, :]
+        
+        label_image_left_feature = image_left_feature.clone()
+        label_image_right_feature = image_right_feature.clone()
 
         # perceiver resampler
-        image_primary_feature = self.perceiver_resampler(image_primary_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))  # mae vit outputs 196 tokens
-        image_wrist_feature = self.perceiver_resampler(image_wrist_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))
-        image_primary_embedding = self.image_primary_projector(image_primary_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
-        image_wrist_embedding = self.image_wrist_projector(image_wrist_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
-        image_embedding = torch.cat((image_primary_embedding, image_wrist_embedding), dim=2)
-        image_cls_token_primary_embedding = self.cls_token_primary_projector(image_primary_cls_token.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
-        image_cls_token_wrist_embedding = self.cls_token_wrist_projector(image_wrist_cls_token.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
-        image_cls_token_embedding = torch.cat((image_cls_token_primary_embedding, image_cls_token_wrist_embedding), dim=2)
+        image_left_feature = self.perceiver_resampler(image_left_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))
+        image_right_feature = self.perceiver_resampler(image_right_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))
+        
+        # Project features using renamed projectors
+        image_left_embedding = self.image_left_projector(image_left_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
+        image_right_embedding = self.image_right_projector(image_right_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
+        image_embedding = torch.cat((image_left_embedding, image_right_embedding), dim=2)
+        
+        image_cls_token_left_embedding = self.cls_token_left_projector(image_left_cls_token.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
+        image_cls_token_right_embedding = self.cls_token_right_projector(image_right_cls_token.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
+        image_cls_token_embedding = torch.cat((image_cls_token_left_embedding, image_cls_token_right_embedding), dim=2)
         
         # aggregate embeddings and add timestep position encoding
         embeddings = torch.cat((text_embedding, state_embedding, image_embedding, image_cls_token_embedding), dim=2)
@@ -405,6 +476,7 @@ class SeerAgent(nn.Module):
         transformer_output = self.transformer_backbone(inputs_embeds=transformer_input, attention_mask=self.attention_mask)
         transformer_output = transformer_output.view(B, S, -1, self.hidden_dim)
 
+        # Image prediction if enabled
         if self.obs_pred:
             obs_pred_feature = transformer_output[:, :, pred_token_start_idx : pred_token_start_idx+self.NUM_OBS_TOKEN, :]
             obs_pred_embedding = self.image_decoder_obs_pred_projector(obs_pred_feature.reshape(-1, self.hidden_dim))
@@ -416,59 +488,59 @@ class SeerAgent(nn.Module):
             image_pred_feature = image_decoder_output[:, -self.NUM_MASK_TOKEN:, :]
             image_pred_feature = self.image_decoder_norm(image_pred_feature.reshape(-1, self.IMAGE_DECODER_hidden_dim))
             image_pred = self.image_decoder_pred(image_pred_feature)  
-            image_pred = image_pred.view(B * S, self.NUM_OBS_TOKEN // self.NUM_OBS_TOKEN_PER_IMAGE, self.NUM_MASK_TOKEN, -1)  
+            image_pred = image_pred.view(B * S, self.NUM_OBS_TOKEN // self.NUM_OBS_TOKEN_PER_IMAGE, self.NUM_MASK_TOKEN, -1)
         
+        # ==== ACTION PREDICTION (MODIFIED) ====
         if self.action_pred_steps > 0:
             if self.obs_pred:
                 this_num_obs_token = self.NUM_OBS_TOKEN
             else:
                 this_num_obs_token = 0
+                
             action_pred_feature = transformer_output[:, :, pred_token_start_idx+this_num_obs_token:pred_token_start_idx+this_num_obs_token+self.action_pred_steps, :]
             action_pred_feature = self.action_decoder(action_pred_feature)
-            arm_pred_action = self.arm_action_decoder(action_pred_feature)
-            gripper_pred_action = self.gripper_action_decoder(action_pred_feature)
+            
+            # Decode separate action components
+            hand_pred_action = self.hand_action_decoder(action_pred_feature)
+            pose_pred_action = self.pose_action_decoder(action_pred_feature)
+            robot_pred_action = self.robot_action_decoder(action_pred_feature)
         
-        return arm_pred_action, gripper_pred_action, image_pred, arm_pred_state, gripper_pred_state, loss_arm_action
+        return hand_pred_action, pose_pred_action, robot_pred_action, image_pred, hand_pred_state, pose_pred_state, robot_pred_state, loss_action
 
 
-# 假设我们已经有SeerAgent的定义，这里只测试前向传播
-def test_seer_agent():
-    # 设置随机种子以确保可重复性
+def test_my_seer_agent():
     torch.manual_seed(42)
     np.random.seed(42)
     
-    # 检查CUDA是否可用
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # 模拟输入数据
     batch_size = 2
     sequence_length = 10
     
     # 创建模拟图像数据 - 主视角和手腕视角
     # [batch_size, sequence_length, channels, height, width]
-    image_primary = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
-    image_wrist = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
+    image_left = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
+    image_right = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
     
-    # 创建模拟状态数据 - 包含机械臂状态和夹爪状态
-    # [batch_size, sequence_length, 8]
-    # 前6个值是机械臂状态，后2个值是夹爪状态
-    state = torch.rand(batch_size, sequence_length, 8, device=device)
+    # 创建模拟状态数据 - 包含hand, pose, robot状态
+    # [batch_size, sequence_length, 12+27+29]
+    state = torch.rand(batch_size, sequence_length, 68, device=device)
     
     # 创建模拟文本token数据 - CLIP模型使用的文本token
     # [batch_size, token_length]
     text_token = torch.randint(0, 49408, (batch_size, 77), device=device).unsqueeze(1).repeat(1, sequence_length, 1)  # CLIP词汇表大小为49408
     
     # 创建模拟动作数据（用于训练时）
-    # [batch_size, sequence_length, 7] - 6个值是机械臂动作，1个值是夹爪动作
-    action = torch.rand(batch_size, sequence_length, 7, device=device)
+    # [batch_size, sequence_length, 12+24+29] - 12个值是hand动作，24个值是pose动作，29个值是robot动作
+    action = torch.rand(batch_size, sequence_length, 65, device=device)
     
     # 打印输入数据的形状
-    print(f"Image Primary Shape: {image_primary.shape}")
-    print(f"Image Wrist Shape: {image_wrist.shape}")
-    print(f"State Shape: {state.shape}")
-    print(f"Text Token Shape: {text_token.shape}")
-    print(f"Action Shape: {action.shape}")
+    print(f"Image Left Shape: {image_left.shape}")  # [2, 10, 3, 224, 224]
+    print(f"Image Right Shape: {image_right.shape}")  # [2, 10, 3, 224, 224]
+    print(f"State Shape: {state.shape}")  # [2, 10, 8]
+    print(f"Text Token Shape: {text_token.shape}")  # [2, 10, 77]
+    print(f"Action Shape: {action.shape}")  # [2, 10, 7]
     
     # 初始化SeerAgent模型
     # 注意：这里使用了一些默认参数，实际使用时可能需要调整
@@ -492,34 +564,34 @@ def test_seer_agent():
         hidden_dim=384,
         transformer_heads=12,
         phase="finetune",
-        gripper_width=True  # Original: False
     ).to(device)
 
     model._init_model_type()
     
-    # 将模型设置为评估模式
     model.eval()
     
-    # 使用try-except块来捕获可能的错误
     try:
-        # 前向传播
         with torch.no_grad():
-            arm_pred_action, gripper_pred_action, image_pred, arm_pred_state, gripper_pred_state, loss_arm_action = model(
-                image_primary, image_wrist, state, text_token, action
+            hand_pred_action, pose_pred_action, robot_pred_action, image_pred, hand_pred_state, pose_pred_state, robot_pred_state, loss_action = model(
+                image_left, image_right, state, text_token, action
             )
         
         # 打印输出结果的形状
         print("\nOutput shapes:")
-        if arm_pred_action is not None:
-            print(f"Arm Predicted Action Shape: {arm_pred_action.shape}")  # [2, 10, 3, 6]
-        if gripper_pred_action is not None:
-            print(f"Gripper Predicted Action Shape: {gripper_pred_action.shape}")  # [2, 10, 3, 1]
+        if hand_pred_action is not None:
+            print(f"Hand Predicted Action Shape: {hand_pred_action.shape}")  # [2, 10, 12]
+        if pose_pred_action is not None:
+            print(f"Pose Predicted Action Shape: {pose_pred_action.shape}")  # [2, 10, 24]
+        if robot_pred_action is not None:
+            print(f"Robot Predicted Action Shape: {robot_pred_action.shape}")  # [2, 10, 29]
         if image_pred is not None:
             print(f"Image Prediction Shape: {image_pred.shape}")  # [20, 2, 196, 768]
-        if arm_pred_state is not None:
-            print(f"Arm Predicted State Shape: {arm_pred_state.shape}")  # Not Predicted
-        if gripper_pred_state is not None:
-            print(f"Gripper Predicted State Shape: {gripper_pred_state.shape}")  # Not Predicted
+        if hand_pred_state is not None:
+            print(f"Hand Predicted State Shape: {hand_pred_state.shape}")  # Not Predicted
+        if pose_pred_state is not None:
+            print(f"Pose Predicted State Shape: {pose_pred_state.shape}")  # Not Predicted
+        if robot_pred_state is not None:
+            print(f"Robot Predicted State Shape: {robot_pred_state.shape}")  # Not Predicted
         
         print("\nForward pass successful!")
         
@@ -545,116 +617,21 @@ def test_seer_agent():
         #     plt.savefig("predicted_image.png")
         #     print("Saved predicted image visualization to 'predicted_image.png'")
         
-        if arm_pred_action is not None:
+        if hand_pred_action is not None:
             # 打印一些预测的动作值
-            print("\nSample Arm Action Predictions:")
-            print(arm_pred_action[0, 0])  # 第一个批次的第一个序列的预测
+            print("\nSample Hand Action Predictions:")
+            print(hand_pred_action[0, 0])  # 第一个批次的第一个序列的预测
         
-        if gripper_pred_action is not None:
+        if pose_pred_action is not None:
             # 打印一些预测的夹爪值
-            print("\nSample Gripper Action Predictions:")
-            print(gripper_pred_action[0, 0])  # 第一个批次的第一个序列的预测
+            print("\nSample Pose Action Predictions:")
+            print(pose_pred_action[0, 0])  # 第一个批次的第一个序列的预测
             
     except Exception as e:
         print(f"Error during forward pass: {e}")
         import traceback
         traceback.print_exc()
 
-# 为了实际运行这个测试，你需要有SeerAgent的完整实现
-# 如果你没有实际的模型权重文件，可以创建一个模拟版本的SeerAgent类来测试
-class MockSeerAgent(nn.Module):
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.hidden_dim = kwargs.get('hidden_dim', 384)
-        self.sequence_length = kwargs.get('sequence_length', 10)
-        self.action_pred_steps = kwargs.get('action_pred_steps', 1)
-        self.obs_pred = kwargs.get('obs_pred', True)
-        
-        # 模拟一些必要的组件
-        self.arm_action_decoder = nn.Linear(self.hidden_dim // 2, 6)
-        self.gripper_action_decoder = nn.Linear(self.hidden_dim // 2, 1)
-        
-    def forward(self, image_primary, image_wrist, state, text_token, action=None):
-        B, S = state.shape[:2]
-        device = image_primary.device
-        
-        # 模拟预测结果
-        arm_pred_action = torch.tanh(torch.rand(B, S, self.action_pred_steps, 6, device=device))
-        gripper_pred_action = torch.sigmoid(torch.rand(B, S, self.action_pred_steps, 1, device=device))
-        
-        # 如果启用了观察预测，模拟图像预测
-        if self.obs_pred:
-            num_patches = int(224 / 16)
-            image_pred = torch.rand(B * S, 2, num_patches * num_patches, 16 * 16 * 3, device=device)
-        else:
-            image_pred = None
-        
-        # 其他返回值设为None
-        arm_pred_state = None
-        gripper_pred_state = None
-        loss_arm_action = None
-        
-        return arm_pred_action, gripper_pred_action, image_pred, arm_pred_state, gripper_pred_state, loss_arm_action
-
-# 使用模拟版本的SeerAgent进行测试
-def test_with_mock_agent():
-    # 设置随机种子以确保可重复性
-    torch.manual_seed(42)
-    np.random.seed(42)
-    
-    # 检查CUDA是否可用
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # 模拟输入数据
-    batch_size = 16
-    sequence_length = 10
-    
-    # 创建模拟数据
-    image_primary = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
-    image_wrist = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
-    state = torch.rand(batch_size, sequence_length, 68, device=device)
-    text_token = torch.randint(0, 49408, (batch_size, 77), device=device)
-    action = torch.rand(batch_size, sequence_length, 7, device=device)
-    
-    # 打印输入数据的形状
-    print(f"Image Primary Shape: {image_primary.shape}")
-    print(f"Image Wrist Shape: {image_wrist.shape}")
-    print(f"State Shape: {state.shape}")
-    print(f"Text Token Shape: {text_token.shape}")
-    print(f"Action Shape: {action.shape}")
-    
-    # 初始化模拟SeerAgent模型
-    model = MockSeerAgent(
-        sequence_length=sequence_length,
-        obs_pred=True,
-        action_pred_steps=1,
-        hidden_dim=384
-    ).to(device)
-    
-    # 将模型设置为评估模式
-    model.eval()
-    
-    # 前向传播
-    with torch.no_grad():
-        arm_pred_action, gripper_pred_action, image_pred, arm_pred_state, gripper_pred_state, loss_arm_action = model(
-            image_primary, image_wrist, state, text_token, action
-        )
-    
-    # 打印输出结果的形状
-    print("\nOutput shapes:")
-    if arm_pred_action is not None:
-        print(f"Arm Predicted Action Shape: {arm_pred_action.shape}")
-    if gripper_pred_action is not None:
-        print(f"Gripper Predicted Action Shape: {gripper_pred_action.shape}")
-    if image_pred is not None:
-        print(f"Image Prediction Shape: {image_pred.shape}")
-    
-    print("\nForward pass with mock agent successful!")
 
 if __name__ == "__main__":
-    # 如果有完整的SeerAgent实现和权重，使用这个
-    test_seer_agent()
-    
-    # 否则使用模拟版本进行测试
-    # test_with_mock_agent()
+    test_my_seer_agent()

@@ -58,8 +58,8 @@ python utils/data_utils.py \
     # --report_to_wandb \
 
 
-# image_primary: torch.Size([16, 10, 3, 224, 224])
-# image_wrist: torch.Size([16, 10, 3, 224, 224])
-# state: torch.Size([16, 10, 68])
-# text_token: torch.Size([16, 77])
-# action: torch.Size([16, 10, 65])
+# image_primary: torch.Size([batch_size, 10, 3, 224, 224])
+# image_wrist: torch.Size([batch_size, 10, 3, 224, 224])
+# state: torch.Size([batch_size, 10, 68])
+# text_token: torch.Size([batch_size, 77])
+# action: torch.Size([batch_size, 10, 65])
