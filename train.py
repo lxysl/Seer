@@ -14,7 +14,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 from models.my_seer_model import SeerAgent
-from utils.my_train_utils import get_checkpoint, train_one_epoch_calvin, get_ckpt_name
+from utils.my_train_utils import get_checkpoint, train_one_epoch_calvin, get_ckpt_name, eval_one_epoch_calvin
 from utils.arguments_utils import get_parser
 from utils.data_utils import get_calvin_dataset, get_calvin_val_dataset, get_droid_dataset, get_libero_pretrain_dataset, get_libero_finetune_dataset, get_real_finetune_dataset, get_oxe_dataset, get_pick_bottle_dataset
 from utils.distributed_utils import init_distributed_device, world_info_from_env  
@@ -86,17 +86,49 @@ def main(args):
         calvin_dataset = get_oxe_dataset(args, model.image_processor, clip, epoch=0)
     elif args.finetune_type == "bottle":
         calvin_dataset = get_pick_bottle_dataset(args, model.image_processor, clip, epoch=0)
+        val_dataset = get_pick_bottle_dataset(args, model.image_processor, clip, epoch=0, validation=True)
     random_seed(args.seed, args.rank)
     print(f"Start running training on rank {args.rank}.")
+    
+    # 检查是否从checkpoint恢复训练并获取wandb run id
+    wandb_run_id = None
+    # 首先尝试从checkpoint加载run id
+    if args.resume_from_checkpoint is not None:
+        if args.rank == 0:
+            print(f"Loading checkpoint from {args.resume_from_checkpoint}")
+        checkpoint = torch.load(args.resume_from_checkpoint, map_location="cpu")
+        # 获取checkpoint中的wandb run id
+        if 'wandb_run_id' in checkpoint:
+            wandb_run_id = checkpoint['wandb_run_id']
+            if args.rank == 0:
+                print(f"Found wandb run id in checkpoint: {wandb_run_id}")
+    
+    # 如果命令行指定了wandb_run_id，则优先使用命令行指定的id
+    if args.wandb_run_id is not None:
+        if args.rank == 0 and wandb_run_id is not None:
+            print(f"Overriding checkpoint wandb run id with command line argument: {args.wandb_run_id}")
+        wandb_run_id = args.wandb_run_id
+    
     if args.rank == 0 and args.report_to_wandb:
         print("wandb_project :", args.wandb_project)
         print("wandb_entity :", args.wandb_entity)
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=args.run_name,
-            config=vars(args),
-        )
+        # 如果有wandb_run_id，则使用它恢复wandb run
+        if wandb_run_id is not None:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.run_name,
+                config=vars(args),
+                id=wandb_run_id,
+                resume="must"  # 确保继续之前的运行
+            )
+        else:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.run_name,
+                config=vars(args),
+            )
     device_id = args.rank % torch.cuda.device_count()
     if args.precision == "bf16" or args.precision == "amp_bfloat16" or args.precision == "amp_bf16":
         model = model.bfloat16()
@@ -196,6 +228,7 @@ def main(args):
         os.makedirs(ckpt_dir)
     
     ddp_model.train()
+    best_val_loss = float('inf')
     for epoch in range(resume_from_epoch, args.num_epochs):
         calvin_dataset.set_epoch(epoch)
         calvin_loader = calvin_dataset.dataloader
@@ -209,6 +242,37 @@ def main(args):
             device_id=device_id,
             wandb=wandb,
         )
+        
+        # 评估阶段
+        if args.finetune_type == "bottle":
+            val_dataset.set_epoch(epoch)
+            val_loader = val_dataset.dataloader
+            val_loss = eval_one_epoch_calvin(
+                args=args,
+                model=ddp_model,
+                epoch=epoch,
+                calvin_loader=val_loader,
+                device_id=device_id,
+                wandb=wandb,
+            )
+            
+            # 保存最佳模型
+            if args.rank == 0 and args.save_checkpoint and val_loss < best_val_loss:
+                best_val_loss = val_loss
+                checkpoint_dict = {
+                    "epoch": epoch,
+                    "model_state_dict": get_checkpoint(ddp_model),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "lr_scheduler_state_dict": lr_scheduler.state_dict(),
+                    "val_loss": val_loss,
+                }
+                # 如果使用wandb，保存wandb run id
+                if args.rank == 0 and args.report_to_wandb:
+                    checkpoint_dict["wandb_run_id"] = wandb.run.id
+                
+                best_ckpt_path = os.path.join(ckpt_dir, "best_model.pth")
+                print(f"Saving best model with val_loss {val_loss:.4f} to {best_ckpt_path}")
+                torch.save(checkpoint_dict, best_ckpt_path)
         if args.rank == 0 and args.save_checkpoint and epoch % args.save_checkpoint_seq == 0 and epoch > args.start_save_checkpoint:
             checkpoint_dict = {
                 "epoch": epoch,
@@ -216,13 +280,19 @@ def main(args):
                 "optimizer_state_dict": optimizer.state_dict(),
                 "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             }
+            # 如果使用wandb，保存wandb run id
+            if args.rank == 0 and args.report_to_wandb:
+                checkpoint_dict["wandb_run_id"] = wandb.run.id
+                
             ckpt_name = get_ckpt_name(args, epoch)
             ckpt_path = os.path.join(ckpt_dir, ckpt_name)
             print(f"Saving checkpoint to {ckpt_path}")
             torch.save(checkpoint_dict, ckpt_path)
             if args.delete_previous_checkpoint:
                 if epoch > 0:
-                    os.remove(ckpt_path)
+                    prev_ckpt_path = os.path.join(ckpt_dir, get_ckpt_name(args, epoch - args.save_checkpoint_seq))
+                    if os.path.exists(prev_ckpt_path):
+                        os.remove(prev_ckpt_path)
 
 if __name__ == "__main__":
     parser = get_parser()

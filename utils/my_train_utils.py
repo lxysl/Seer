@@ -315,3 +315,171 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
         
+def eval_one_epoch_calvin(
+    args,
+    model,
+    epoch,
+    calvin_loader,
+    device_id,
+    wandb,
+):
+    num_batches_per_epoch_calvin = calvin_loader.num_batches
+    num_batches_per_epoch = num_batches_per_epoch_calvin
+    autocast = get_autocast(args.precision)
+    cast_dtype = get_cast_dtype(args.precision)
+    model.eval()
+
+    # setup logging
+    step_time_m = AverageMeter()  # time for one step
+    data_time_m = AverageMeter()  # avg time to load one batch
+    end = time.time()
+    
+    # metrics
+    val_loss_action = AverageMeter()
+    val_loss_hand_action = AverageMeter()
+    val_loss_pose_action = AverageMeter()
+    val_loss_robot_action = AverageMeter()
+    val_loss_image = AverageMeter()
+    val_loss_calvin = AverageMeter()
+    
+    # loop through dataloader
+    t = tqdm(
+        enumerate(calvin_loader),
+        disable=args.rank != 0,
+        total=num_batches_per_epoch,
+        desc=f"validation epoch {epoch+1}/{args.num_epochs}"
+    )
+    
+    with torch.no_grad():
+        for num_steps, batch_calvin in t:
+            data_time_m.update(time.time() - end)
+            global_step = num_steps + epoch * num_batches_per_epoch
+
+            # images
+            images_left = batch_calvin[0].to(device_id, dtype=cast_dtype, non_blocking=True)
+            images_right = batch_calvin[3].to(device_id, dtype=cast_dtype, non_blocking=True)
+            
+            # text tokens
+            text_tokens = batch_calvin[1].to(device_id, non_blocking=True).unsqueeze(1).repeat(1, args.window_size, 1)
+            
+            # states - handles hand, pose, robot components
+            states = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
+            input_states = states  # Use the full state vector
+            
+            # self_key_point
+            self_keypoints = None
+            
+            # actions - handles hand, pose, robot components
+            actions = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
+            
+            # Prepare inputs for the model
+            input_image_left = images_left[:, :args.sequence_length, :]
+            input_image_right = images_right[:, :args.sequence_length, :]
+            input_text_token = text_tokens[:, :args.sequence_length, :]
+            input_state = input_states[:, :args.sequence_length, :]
+
+            # Prepare label actions for all components
+            label_actions = torch.cat([actions[:, j:args.sequence_length-args.atten_goal+j, :].unsqueeze(-2) 
+                                    for j in range(args.action_pred_steps)], dim=-2)
+            
+            # Separate label actions for hand, pose, and robot components
+            hand_dim, pose_dim, robot_dim = 12, 24, 29
+            label_hand_actions = label_actions[..., :hand_dim]
+            label_pose_actions = label_actions[..., hand_dim:hand_dim+pose_dim]
+            label_robot_actions = label_actions[..., hand_dim+pose_dim:hand_dim+pose_dim+robot_dim]
+
+            with autocast():
+                # Call model with parameter names and receive outputs
+                hand_pred_action, pose_pred_action, robot_pred_action, image_pred, \
+                hand_pred_state, pose_pred_state, robot_pred_state, loss_action = model(
+                    image_left=input_image_left,
+                    image_right=input_image_right,
+                    state=input_state,
+                    text_token=input_text_token,
+                    action=actions[:, :args.sequence_length, :],
+                )
+            
+            # Calculate action losses for all three components
+            if args.loss_action and args.action_pred_steps:
+                loss_hand_action = torch.nn.functional.smooth_l1_loss(
+                    hand_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_hand_actions[:, :args.sequence_length-args.atten_goal].detach())
+                
+                loss_pose_action = torch.nn.functional.smooth_l1_loss(
+                    pose_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_pose_actions[:, :args.sequence_length-args.atten_goal].detach())
+                
+                loss_robot_action = torch.nn.functional.smooth_l1_loss(
+                    robot_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_robot_actions[:, :args.sequence_length-args.atten_goal].detach())
+            else:
+                loss_hand_action = torch.tensor([0.0]).to(device_id)
+                loss_pose_action = torch.tensor([0.0]).to(device_id)
+                loss_robot_action = torch.tensor([0.0]).to(device_id)
+
+            # Image loss calculation 
+            if args.loss_image and args.obs_pred:
+                label_image_left = images_left[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
+                label_image_right = images_right[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
+                label_image_left = patchify(label_image_left, patch_size=args.patch_size)
+                label_image_right = patchify(label_image_right, patch_size=args.patch_size)
+                label_image_left = normalize_patchfied_image(label_image_left)
+                label_image_right = normalize_patchfied_image(label_image_right)
+                
+                image_pred = image_pred.reshape(-1, args.sequence_length, image_pred.shape[1], image_pred.shape[2], image_pred.shape[3])
+                image_pred = image_pred[:, :args.sequence_length-args.atten_goal]
+                image_pred = image_pred.reshape(-1, image_pred.shape[2], image_pred.shape[3], image_pred.shape[4])
+                
+                loss_image = 0.5 * (torch.nn.functional.mse_loss(
+                                image_pred[:, 0, :, :], 
+                                label_image_left.detach()) + 
+                                torch.nn.functional.mse_loss(
+                                image_pred[:, 1, :, :], 
+                                label_image_right.detach()))
+            else:
+                loss_image = torch.tensor([0.0]).to(device_id)
+            
+            # Combined loss - includes all three action components
+            loss_action_combined = (
+                args.loss_hand_action_ratio * loss_hand_action + 
+                args.loss_pose_action_ratio * loss_pose_action + 
+                args.loss_robot_action_ratio * loss_robot_action
+            )
+            
+            loss_calvin = loss_action_combined + args.loss_image_ratio * loss_image
+            
+            # Update metrics
+            val_loss_hand_action.update(loss_hand_action.item())
+            val_loss_pose_action.update(loss_pose_action.item())
+            val_loss_robot_action.update(loss_robot_action.item())
+            val_loss_image.update(loss_image.item())
+            val_loss_calvin.update(loss_calvin.item())
+            
+            # step time and reset end outside of rank 0
+            step_time_m.update(time.time() - end)
+            end = time.time()
+            
+            if args.rank == 0:
+                t.set_postfix({
+                    'val_loss': f'{val_loss_calvin.avg:.4f}',
+                    'hand_loss': f'{val_loss_hand_action.avg:.4f}',
+                    'pose_loss': f'{val_loss_pose_action.avg:.4f}',
+                    'robot_loss': f'{val_loss_robot_action.avg:.4f}',
+                    'img_loss': f'{val_loss_image.avg:.4f}'
+                })
+
+    # Log validation metrics
+    if args.rank == 0 and args.report_to_wandb:
+        wandb.log(
+            {
+                "val/loss_calvin": val_loss_calvin.avg,
+                "val/loss_hand_action": val_loss_hand_action.avg,
+                "val/loss_pose_action": val_loss_pose_action.avg,
+                "val/loss_robot_action": val_loss_robot_action.avg,
+                "val/loss_image": val_loss_image.avg,
+                "val/epoch": epoch,
+            },
+        )
+    
+    return val_loss_calvin.avg
+        

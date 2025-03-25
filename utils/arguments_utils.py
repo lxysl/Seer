@@ -122,6 +122,12 @@ def get_parser(is_eval=False):
         action="store_true",
         help="save checkpoints to wandb",
     )
+    parser.add_argument(
+        "--wandb_run_id",
+        type=str,
+        default=None,
+        help="Specify the wandb run ID to be restored; if this parameter is provided, it will take precedence over the run ID saved in the checkpoint.",
+    )
     parser.add_argument('--rgb_pad', type=int, default=-1)
     parser.add_argument('--gripper_pad', type=int, default=-1)
     parser.add_argument(

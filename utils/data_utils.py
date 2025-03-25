@@ -56,6 +56,7 @@ import time
 import pyzed.sl as sl
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import decord
+import threading
 
 Image.MAX_IMAGE_PIXELS = 1000000000
 MAX_NUM_TOKENS = 256
@@ -3583,6 +3584,10 @@ class PickBottleDataset(Dataset):
         self.video_cache = {}
         self.language_instruction = "Pick up the bottle"
         
+        # 初始化文件锁字典和锁管理锁
+        self.file_locks = {}
+        self.file_locks_lock = threading.Lock()
+        
     def _build_file_indices(self):
         episode_lookup = []
         folder_mapping = {}
@@ -3649,65 +3654,28 @@ class PickBottleDataset(Dataset):
                 "right": [right_frame_1, right_frame_2, ...]
             }
         """
-        # video_cache = {}
-        # if video_filename not in video_cache:
-        #     left_video_name = video_filename[:-5] + '_left.mp4'
-        #     right_video_name = video_filename[:-5] + '_right.mp4'
-        #     time_stamps_name = video_filename[:-5] + '_time_stamps.npy'
-
-        #     cap = cv2.VideoCapture(left_video_name)
-        #     left_imgs = []
-        #     frame_count = 0
-        #     while True:
-        #         ret, frame = cap.read()
-        #         if not ret:
-        #             break
-        #         left_imgs.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        #         frame_count += 1
-        #     left_imgs = np.array(left_imgs, dtype=np.uint8)
-
-        #     cap = cv2.VideoCapture(right_video_name)
-        #     right_imgs = []
-        #     frame_count = 0
-        #     while True:
-        #         ret, frame = cap.read()
-        #         if not ret:
-        #             break
-        #         right_imgs.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        #         frame_count += 1
-        #     right_imgs = np.array(right_imgs, dtype=np.uint8)
-
-        #     time_stamps = np.load(time_stamps_name)
-
-        #     video_cache[video_filename] = {
-        #         "left": left_imgs,
-        #         "right": right_imgs,
-        #         "timestamps": time_stamps
-        #     }
-        
-        # cached_data = video_cache[video_filename]
-        # all_left_frames = cached_data["left"]
-        # all_right_frames = cached_data["right"]
-        # video_timestamps = cached_data["timestamps"]
-        
-        # selected_left_frames = []
-        # selected_right_frames = []
-        # for ts in timestamps:
-        #     closest_idx = np.argmin(np.abs(video_timestamps - ts))
-        #     selected_left_frames.append(all_left_frames[closest_idx])
-        #     selected_right_frames.append(all_right_frames[closest_idx])
-        
-        # return {
-        #     "left": np.array(selected_left_frames),
-        #     "right": np.array(selected_right_frames)
-        # }
-            # Derive filenames from the SVO2 file path
+        # Derive filenames from the SVO2 file path
         left_video_name = video_filename[:-5] + '_left.mp4'
         right_video_name = video_filename[:-5] + '_right.mp4'
         time_stamps_name = video_filename[:-5] + '_time_stamps.npy'
         
-        # Load timestamps first
-        video_timestamps = np.load(time_stamps_name)
+        # 获取或创建这些文件的锁
+        with self.file_locks_lock:
+            if left_video_name not in self.file_locks:
+                self.file_locks[left_video_name] = threading.Lock()
+            if right_video_name not in self.file_locks:
+                self.file_locks[right_video_name] = threading.Lock()
+            if time_stamps_name not in self.file_locks:
+                self.file_locks[time_stamps_name] = threading.Lock()
+            
+            left_lock = self.file_locks[left_video_name]
+            right_lock = self.file_locks[right_video_name]
+            time_stamps_lock = self.file_locks[time_stamps_name]
+        
+        # 使用锁加载时间戳
+        with time_stamps_lock:
+            # Load timestamps first
+            video_timestamps = np.load(time_stamps_name)
         
         # Find the indices of frames that are closest to the requested timestamps
         selected_indices = []
@@ -3715,18 +3683,17 @@ class PickBottleDataset(Dataset):
             closest_idx = np.argmin(np.abs(video_timestamps - ts))
             selected_indices.append(closest_idx)
         
-        # Load only the needed frames from left video
-        left_vr = decord.VideoReader(left_video_name)
-        selected_left_frames = left_vr.get_batch(selected_indices).asnumpy()
+        # 使用锁加载左侧视频帧
+        with left_lock:
+            # Load only the needed frames from left video
+            left_vr = decord.VideoReader(left_video_name)
+            selected_left_frames = left_vr.get_batch(selected_indices).asnumpy()
         
-        # Load only the needed frames from right video
-        right_vr = decord.VideoReader(right_video_name)
-        selected_right_frames = right_vr.get_batch(selected_indices).asnumpy()
-        
-        # Convert from BGR to RGB if needed (Decord returns frames in RGB by default)
-        # If you need BGR to RGB conversion, uncomment these lines:
-        # selected_left_frames = selected_left_frames[:, :, :, ::-1]  
-        # selected_right_frames = selected_right_frames[:, :, :, ::-1]
+        # 使用锁加载右侧视频帧
+        with right_lock:
+            # Load only the needed frames from right video
+            right_vr = decord.VideoReader(right_video_name)
+            selected_right_frames = right_vr.get_batch(selected_indices).asnumpy()
 
         return {
             "left": selected_left_frames,

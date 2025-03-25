@@ -516,31 +516,39 @@ def test_my_seer_agent():
     print(f"Using device: {device}")
     
     batch_size = 2
-    sequence_length = 10
+    window_size = 10
+    sequence_length = 7
     
     # 创建模拟图像数据 - 主视角和手腕视角
-    # [batch_size, sequence_length, channels, height, width]
-    image_left = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
-    image_right = torch.rand(batch_size, sequence_length, 3, 224, 224, device=device)
+    # [batch_size, window_size, channels, height, width]
+    image_left = torch.rand(batch_size, window_size, 3, 224, 224, device=device)
+    image_right = torch.rand(batch_size, window_size, 3, 224, 224, device=device)
     
     # 创建模拟状态数据 - 包含hand, pose, robot状态
-    # [batch_size, sequence_length, 12+27+29]
-    state = torch.rand(batch_size, sequence_length, 68, device=device)
+    # [batch_size, window_size, 12+27+29]
+    state = torch.rand(batch_size, window_size, 68, device=device)
     
     # 创建模拟文本token数据 - CLIP模型使用的文本token
     # [batch_size, token_length]
-    text_token = torch.randint(0, 49408, (batch_size, 77), device=device).unsqueeze(1).repeat(1, sequence_length, 1)  # CLIP词汇表大小为49408
+    text_token = torch.randint(0, 49408, (batch_size, 77), device=device).unsqueeze(1).repeat(1, window_size, 1)  # CLIP词汇表大小为49408
     
     # 创建模拟动作数据（用于训练时）
-    # [batch_size, sequence_length, 12+24+29] - 12个值是hand动作，24个值是pose动作，29个值是robot动作
-    action = torch.rand(batch_size, sequence_length, 65, device=device)
+    # [batch_size, window_size, 12+24+29] - 12个值是hand动作，24个值是pose动作，29个值是robot动作
+    action = torch.rand(batch_size, window_size, 65, device=device)
     
     # 打印输入数据的形状
     print(f"Image Left Shape: {image_left.shape}")  # [2, 10, 3, 224, 224]
     print(f"Image Right Shape: {image_right.shape}")  # [2, 10, 3, 224, 224]
-    print(f"State Shape: {state.shape}")  # [2, 10, 8]
+    print(f"State Shape: {state.shape}")  # [2, 10,  68]
     print(f"Text Token Shape: {text_token.shape}")  # [2, 10, 77]
-    print(f"Action Shape: {action.shape}")  # [2, 10, 7]
+    print(f"Action Shape: {action.shape}")  # [2, 10, 65]
+
+    # 截断到sequence_length
+    image_left = image_left[:, :sequence_length, :, :, :]
+    image_right = image_right[:, :sequence_length, :, :, :]
+    state = state[:, :sequence_length, :]
+    text_token = text_token[:, :sequence_length, :]
+    action = action[:, :sequence_length, :]
     
     # 初始化SeerAgent模型
     # 注意：这里使用了一些默认参数，实际使用时可能需要调整

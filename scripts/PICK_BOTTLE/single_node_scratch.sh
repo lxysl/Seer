@@ -51,7 +51,7 @@ torchrun --nnodes=${node} --nproc_per_node=${node_num} --master_port=10211 train
     --obs_pred \
     --loss_action \
     --save_checkpoint_seq 1 \
-    --start_save_checkpoint 15 \
+    --start_save_checkpoint 1 \
     --warmup_epochs 5 \
     --use_aug_data \
     --report_to_wandb \
