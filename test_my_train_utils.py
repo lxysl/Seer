@@ -103,6 +103,9 @@ class MockArgs:
         self.save_checkpoint = False
         self.report_to_wandb = False
 
+        # 控制类型
+        self.control_type = "position"
+
 def test_train_one_epoch_calvin():
     print("开始测试 train_one_epoch_calvin 函数")
     
@@ -147,6 +150,7 @@ def test_train_one_epoch_calvin():
         hidden_dim=384,
         transformer_heads=12,
         phase="finetune",
+        control_type=args.control_type
     ).to(device)
     
     # 初始化模型类型

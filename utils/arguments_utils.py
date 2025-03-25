@@ -242,6 +242,16 @@ def get_parser(is_eval=False):
     parser.add_argument("--max_rel_orn", type=float, default=0.05)
     parser.add_argument("--magic_scaling_factor_pos", type=float, default=1.0)
     parser.add_argument("--magic_scaling_factor_orn", type=float, default=1.0)
+    
+    # 新增控制类型参数
+    parser.add_argument(
+        "--control_type",
+        type=str,
+        default="all",
+        choices=["position", "pose", "all"],
+        help="Control type: 'position' for hand/robot position control, 'pose' for end effector pose control, 'all' for both",
+    )
+    
     # for eval
     if is_eval:
         parser.add_argument("--calvin_conf_path", type=str, help="path to calvin configuration file")

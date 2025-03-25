@@ -71,6 +71,7 @@ def main(args):
         transformer_heads=args.transformer_heads,
         phase=args.phase,
         gripper_width=args.gripper_width,
+        control_type=args.control_type,
     )
     if args.finetune_type == "calvin":
         calvin_dataset = get_calvin_dataset(args, model.image_processor, clip, epoch=0, except_lang=args.except_lang)

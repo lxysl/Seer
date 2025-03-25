@@ -138,6 +138,7 @@ class SeerAgent(nn.Module):
         transformer_heads=12,
         phase="",
         gripper_width=False,
+        control_type="all",
     ):
         super().__init__()
         self.finetune_type = finetune_type
@@ -152,27 +153,40 @@ class SeerAgent(nn.Module):
         self.mask_l_obs_ratio = mask_l_obs_ratio
         self.hidden_dim = hidden_dim
         self.phase = phase
+        self.control_type = control_type
         assert self.phase in ["pretrain", "finetune", "evaluate"]
         self.vit_checkpoint_path = vit_checkpoint_path
+
+        # 设定输入输出维度
+        self.hand_state_dim = 12
+        self.pose_state_dim = 27
+        self.robot_state_dim = 29
+        self.hand_action_dim = 12
+        self.pose_action_dim = 24
+        self.robot_action_dim = 29
 
         # text projector
         self.text_projector = nn.Linear(512, self.hidden_dim)        
 
-        # ==== STATE ENCODER (MODIFIED) ====
+        # ==== STATE ENCODER ====
         # New state encoders for hand, pose, robot
         HAND_STATE_FEATURE_DIM = self.hidden_dim
         POSE_STATE_FEATURE_DIM = self.hidden_dim
         ROBOT_STATE_FEATURE_DIM = self.hidden_dim
         
-        self.hand_state_encoder = nn.Linear(12, HAND_STATE_FEATURE_DIM)
-        self.pose_state_encoder = nn.Linear(27, POSE_STATE_FEATURE_DIM)
-        self.robot_state_encoder = nn.Linear(29, ROBOT_STATE_FEATURE_DIM)
+        self.hand_state_encoder = nn.Linear(self.hand_state_dim, HAND_STATE_FEATURE_DIM)
+        self.pose_state_encoder = nn.Linear(self.pose_state_dim, POSE_STATE_FEATURE_DIM)
+        self.robot_state_encoder = nn.Linear(self.robot_state_dim, ROBOT_STATE_FEATURE_DIM)
         
         # Combined state projector
-        self.state_projector = nn.Linear(
-            HAND_STATE_FEATURE_DIM + POSE_STATE_FEATURE_DIM + ROBOT_STATE_FEATURE_DIM, 
-            self.hidden_dim
-        )
+        state_input_dim = None
+        if self.control_type == "all":
+            state_input_dim = HAND_STATE_FEATURE_DIM + POSE_STATE_FEATURE_DIM + ROBOT_STATE_FEATURE_DIM
+        elif self.control_type == "position":
+            state_input_dim = HAND_STATE_FEATURE_DIM + ROBOT_STATE_FEATURE_DIM
+        elif self.control_type == "pose":
+            state_input_dim = POSE_STATE_FEATURE_DIM
+        self.state_projector = nn.Linear(state_input_dim, self.hidden_dim)
 
         # ==== ACTION ENCODER (MODIFIED) ====
         # New action encoders for hand, pose, robot
@@ -180,9 +194,9 @@ class SeerAgent(nn.Module):
         POSE_ACTION_FEATURE_DIM = self.hidden_dim
         ROBOT_ACTION_FEATURE_DIM = self.hidden_dim
         
-        self.action_hand_encoder = nn.Linear(12, HAND_ACTION_FEATURE_DIM)
-        self.action_pose_encoder = nn.Linear(24, POSE_ACTION_FEATURE_DIM)
-        self.action_robot_encoder = nn.Linear(29, ROBOT_ACTION_FEATURE_DIM)
+        self.action_hand_encoder = nn.Linear(self.hand_action_dim, HAND_ACTION_FEATURE_DIM)
+        self.action_pose_encoder = nn.Linear(self.pose_action_dim, POSE_ACTION_FEATURE_DIM)
+        self.action_robot_encoder = nn.Linear(self.robot_action_dim, ROBOT_ACTION_FEATURE_DIM)
         
         # Combined action projector
         self.action_projector = nn.Linear(
@@ -254,20 +268,17 @@ class SeerAgent(nn.Module):
             nn.ReLU(),
         )
         
-        # New decoders for hand, pose, robot
+        # 根据控制类型调整输出层
         self.hand_action_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 12),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.hand_action_dim),
         )
         
         self.pose_action_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 24),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.pose_action_dim),
         )
         
         self.robot_action_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 29),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.robot_action_dim),
         )
 
         # ==== STATE RECONSTRUCTION DECODER (MODIFIED) ====
@@ -280,18 +291,15 @@ class SeerAgent(nn.Module):
         
         # New state reconstruction decoders
         self.recon_hand_state_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 12),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.hand_state_dim),
         ) # not used
         
         self.recon_pose_state_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 27),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.pose_state_dim),
         ) # not used
         
         self.recon_robot_state_decoder = nn.Sequential(
-            nn.Linear(MLP_hidden_dim, 29),
-            # torch.nn.Tanh(),
+            nn.Linear(MLP_hidden_dim, self.robot_state_dim),
         ) # not used
 
         # Image decoder components
@@ -349,15 +357,16 @@ class SeerAgent(nn.Module):
         self.transformer_backbone_type = next(self.transformer_backbone.parameters()).type()
         self.action_decoder_type = next(self.action_decoder.parameters()).type()
 
-    def forward(self, image_left, image_right, state, text_token, action=None):  
+    def forward(self, image_left, image_right, text_token, hand_state=None, pose_state=None, robot_state=None, action=None):  
         """
-        Modified forward pass to handle new input structure
+        Modified forward pass to handle new input structure and control type selection
         
         Args:
             image_left: Left camera image, shape [B, S, C, H, W]
             image_right: Right camera image, shape [B, S, C, H, W]
-            state: State tensor containing hand, pose, robot parts 
-                   [B, S, hand_dim(12) + pose_dim(27) + robot_dim(29)]
+            hand_state: Hand state tensor, shape [B, S, hand_dim(12)]
+            pose_state: Pose state tensor, shape [B, S, pose_dim(27)]
+            robot_state: Robot state tensor, shape [B, S, robot_dim(29)]
             text_token: Text tokens from CLIP, shape [B, S, token_length]
             action: Optional action tensor containing hand, pose, robot parts
                     [B, S, hand_dim(12) + pose_dim(24) + robot_dim(29)]
@@ -384,8 +393,20 @@ class SeerAgent(nn.Module):
                             num_obs_token=this_num_obs_token,
                             action_pred_steps=self.action_pred_steps).to(self.device), 
                             requires_grad=False)
-                            
-        B, S, _ = state.shape
+
+        B, S, state_type = None, None, None
+        if hand_state is not None:
+            B, S, _ = hand_state.shape
+            state_type = hand_state.type()
+            hand_state = hand_state.flatten(0, 1)  # [B*S, state_dim]
+        if pose_state is not None:
+            B, S, _ = pose_state.shape
+            state_type = pose_state.type()
+            pose_state = pose_state.flatten(0, 1)  # [B*S, state_dim]
+        if robot_state is not None:
+            B, S, _ = robot_state.shape
+            state_type = robot_state.type()
+            robot_state = robot_state.flatten(0, 1)  # [B*S, state_dim]
         device = image_left.device
         S_AND_FUTURE = image_left.shape[1]
         image_pred = None
@@ -396,31 +417,28 @@ class SeerAgent(nn.Module):
         # text embedding
         with torch.no_grad():
             text_feature = self.clip_model.encode_text(text_token.flatten(0, 1))
-            text_feature = text_feature.type(state.type())
+            text_feature = text_feature.type(state_type)
         text_embedding = self.text_projector(text_feature)
         text_embedding = text_embedding.view(B, S, -1, self.hidden_dim) 
 
-        # ==== STATE EMBEDDING (MODIFIED) ====
-        state = state.flatten(0, 1)  # [B*S, state_dim]
-        
-        # Extract components from state
-        # Assuming state is concatenated in order: [hand(12), pose(27), robot(29)]
-        hand_state = state[:, :12]
-        pose_state = state[:, 12:12+27]
-        robot_state = state[:, 12+27:12+27+29]
-        
-        # Encode each component
-        hand_state_feature = self.hand_state_encoder(hand_state)
-        pose_state_feature = self.pose_state_encoder(pose_state)
-        robot_state_feature = self.robot_state_encoder(robot_state)
-        
-        # Combine and project state features
-        state_embedding = self.state_projector(
-            torch.cat((hand_state_feature, pose_state_feature, robot_state_feature), dim=1)
-        )
+        # ==== STATE EMBEDDING ====
+        # Assuming each state is: hand(12), pose(27), robot(29)
+        if self.control_type == "all":
+            hand_state_feature = self.hand_state_encoder(hand_state)
+            pose_state_feature = self.pose_state_encoder(pose_state)
+            robot_state_feature = self.robot_state_encoder(robot_state)
+            state_embedding = self.state_projector(torch.cat((hand_state_feature, pose_state_feature, robot_state_feature), dim=1))
+        elif self.control_type == "position":
+            hand_state_feature = self.hand_state_encoder(hand_state)
+            robot_state_feature = self.robot_state_encoder(robot_state)
+            state_embedding = self.state_projector(torch.cat((hand_state_feature, robot_state_feature), dim=1))
+        else:  # pose
+            pose_state_feature = self.pose_state_encoder(pose_state)
+            state_embedding = self.state_projector(pose_state_feature)
+            
         state_embedding = state_embedding.view(B, S, -1, self.hidden_dim)
 
-        # ==== IMAGE FEATURE EXTRACTION (RENAMED variables from primary/wrist to left/right) ====
+        # ==== IMAGE FEATURE EXTRACTION ====
         if image_left.type() != self.vision_encoder_type:
             image_left = image_left.type(self.vision_encoder_type)
             image_right = image_right.type(self.vision_encoder_type)
@@ -448,7 +466,7 @@ class SeerAgent(nn.Module):
         image_left_feature = self.perceiver_resampler(image_left_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))
         image_right_feature = self.perceiver_resampler(image_right_feature.reshape(B*S, 196, self.RESAMPLER_hidden_dim).unsqueeze(1).unsqueeze(1))
         
-        # Project features using renamed projectors
+        # Project features
         image_left_embedding = self.image_left_projector(image_left_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
         image_right_embedding = self.image_right_projector(image_right_feature.flatten(0, 2)).view(B, S, -1, self.hidden_dim)
         image_embedding = torch.cat((image_left_embedding, image_right_embedding), dim=2)
@@ -500,11 +518,20 @@ class SeerAgent(nn.Module):
             action_pred_feature = transformer_output[:, :, pred_token_start_idx+this_num_obs_token:pred_token_start_idx+this_num_obs_token+self.action_pred_steps, :]
             action_pred_feature = self.action_decoder(action_pred_feature)
             
-            # Decode separate action components
-            hand_pred_action = self.hand_action_decoder(action_pred_feature)
-            pose_pred_action = self.pose_action_decoder(action_pred_feature)
-            robot_pred_action = self.robot_action_decoder(action_pred_feature)
-        
+            # 根据控制类型选择性地预测动作
+            if self.control_type in ["position", "all"]:
+                hand_pred_action = self.hand_action_decoder(action_pred_feature)
+            
+            if self.control_type in ["pose", "all"]:
+                pose_pred_action = self.pose_action_decoder(action_pred_feature)
+            
+            if self.control_type in ["position", "all"]:
+                robot_pred_action = self.robot_action_decoder(action_pred_feature)
+
+            # 将前15个维度设置为0（仅在输出时）
+            if robot_pred_action is not None:
+                robot_pred_action[:, :, :, :15] = 0
+
         return hand_pred_action, pose_pred_action, robot_pred_action, image_pred, hand_pred_state, pose_pred_state, robot_pred_state, loss_action
 
 
@@ -572,6 +599,7 @@ def test_my_seer_agent():
         hidden_dim=384,
         transformer_heads=12,
         phase="finetune",
+        control_type="all",
     ).to(device)
 
     model._init_model_type()

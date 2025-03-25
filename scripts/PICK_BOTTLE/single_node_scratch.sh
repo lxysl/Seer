@@ -55,5 +55,6 @@ torchrun --nnodes=${node} --nproc_per_node=${node_num} --master_port=10211 train
     --warmup_epochs 5 \
     --use_aug_data \
     --report_to_wandb \
+    --control_type "position" \
     # --loss_image \
 

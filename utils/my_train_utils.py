@@ -111,15 +111,15 @@ def train_one_epoch_calvin(
         # actions - now handles hand, pose, robot components
         actions = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
         
-        # No special normalization for gripper control as we're handling things differently now
-        # We're assuming actions is already in the right format [hand(12), pose(24), robot(29)]
-        
         # Prepare inputs for the model
         input_image_left = images_left[:, :args.sequence_length, :]
         input_image_right = images_right[:, :args.sequence_length, :]
         input_text_token = text_tokens[:, :args.sequence_length, :]
-        input_state = input_states[:, :args.sequence_length, :]
 
+        input_hand_state = input_states[:, :args.sequence_length, :12] if args.control_type in ["position", "all"] else None
+        input_pose_state = input_states[:, :args.sequence_length, 12:12+27] if args.control_type in ["pose", "all"] else None
+        input_robot_state = input_states[:, :args.sequence_length, 12+27:] if args.control_type in ["position", "all"] else None
+            
         # Prepare label actions for all components
         label_actions = torch.cat([actions[:, j:args.sequence_length-args.atten_goal+j, :].unsqueeze(-2) 
                                  for j in range(args.action_pred_steps)], dim=-2)
@@ -137,31 +137,41 @@ def train_one_epoch_calvin(
             hand_pred_state, pose_pred_state, robot_pred_state, loss_action = model(
                 image_left=input_image_left,
                 image_right=input_image_right,
-                state=input_state,
+                hand_state=input_hand_state,
+                pose_state=input_pose_state,
+                robot_state=input_robot_state,
                 text_token=input_text_token,
                 action=actions[:, :args.sequence_length, :],
             )
         
-        # Calculate action losses for all three components
+        # 根据控制类型计算不同的损失
+        # Initialize losses with zero tensors
+        loss_hand_action = torch.tensor([0.0]).to(device_id)
+        loss_pose_action = torch.tensor([0.0]).to(device_id)
+        loss_robot_action = torch.tensor([0.0]).to(device_id)
+        
+        # Calculate action losses based on control_type
         if args.loss_action and args.action_pred_steps:
-            loss_hand_action = torch.nn.functional.smooth_l1_loss(
-                hand_pred_action[:, :args.sequence_length-args.atten_goal], 
-                label_hand_actions[:, :args.sequence_length-args.atten_goal].detach())
+            # Hand action loss (for "position" or "all" control types)
+            if args.control_type in ["position", "all"] and hand_pred_action is not None:
+                loss_hand_action = torch.nn.functional.smooth_l1_loss(
+                    hand_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_hand_actions[:, :args.sequence_length-args.atten_goal].detach())
             
-            loss_pose_action = torch.nn.functional.smooth_l1_loss(
-                pose_pred_action[:, :args.sequence_length-args.atten_goal], 
-                label_pose_actions[:, :args.sequence_length-args.atten_goal].detach())
+            # Pose action loss (for "pose" or "all" control types)
+            if args.control_type in ["pose", "all"] and pose_pred_action is not None:
+                loss_pose_action = torch.nn.functional.smooth_l1_loss(
+                    pose_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_pose_actions[:, :args.sequence_length-args.atten_goal].detach())
             
-            loss_robot_action = torch.nn.functional.smooth_l1_loss(
-                robot_pred_action[:, :args.sequence_length-args.atten_goal], 
-                label_robot_actions[:, :args.sequence_length-args.atten_goal].detach())
-        else:
-            loss_hand_action = torch.tensor([0.0]).to(device_id)
-            loss_pose_action = torch.tensor([0.0]).to(device_id)
-            loss_robot_action = torch.tensor([0.0]).to(device_id)
+            # Robot action loss (for "position" or "all" control types)
+            if args.control_type in ["position", "all"] and robot_pred_action is not None:
+                loss_robot_action = torch.nn.functional.smooth_l1_loss(
+                    robot_pred_action[:, :args.sequence_length-args.atten_goal], 
+                    label_robot_actions[:, :args.sequence_length-args.atten_goal].detach())
 
         # Image loss calculation 
-        if args.loss_image and args.obs_pred:
+        if args.loss_image and args.obs_pred and image_pred is not None:
             label_image_left = images_left[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
             label_image_right = images_right[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
             label_image_left = patchify(label_image_left, patch_size=args.patch_size)
@@ -182,7 +192,7 @@ def train_one_epoch_calvin(
         else:
             loss_image = torch.tensor([0.0]).to(device_id)
         
-        # Combined loss - now includes all three action components
+        # Combined loss - now includes components based on control_type
         loss_action_combined = (
             args.loss_hand_action_ratio * loss_hand_action + 
             args.loss_pose_action_ratio * loss_pose_action + 
@@ -252,36 +262,20 @@ def train_one_epoch_calvin(
                 )
 
         avg_horizon = min(100, len(mv_avg_loss))
-        t.set_postfix({
-            "avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, 
-            "loss": loss_calvin.item(), 
-            "loss_image": loss_image.item(), 
-            "loss_hand": loss_hand_action.item(),
-            "loss_pose": loss_pose_action.item(),
-            "loss_robot": loss_robot_action.item()
-        })
-
-        # if args.save_every_iter != -1 and args.save_checkpoint and global_step % args.save_every_iter == 0 and global_step > 0:
-                
-        #     if args.rank == 0:
-        #         import os
-        #         if not os.path.exists(f"{args.save_checkpoint_path}/exp/{args.run_name}"):
-        #             os.makedirs(f"{args.save_checkpoint_path}/exp/{args.run_name}")
-
-        #         checkpoint_dict = {
-        #             "epoch": epoch,
-        #             "model_state_dict": get_checkpoint(model),
-        #             "optimizer_state_dict": optimizer.state_dict(),
-        #             "lr_scheduler_state_dict": lr_scheduler.state_dict(),
-        #         }
-
-        #         ckpt_name = get_ckpt_name(args, global_step)
-        #         ckpt_path = os.path.join(f"{args.save_checkpoint_path}/exp", args.run_name, ckpt_name)
-        #         print(f"Saving checkpoint to {ckpt_path}")
-        #         torch.save(checkpoint_dict, ckpt_path)
-        #         if args.delete_previous_checkpoint:
-        #             if epoch > 0:
-        #                 os.remove(ckpt_path)
+        # 根据控制类型显示不同的损失
+        postfix_dict = {"avg loss": sum(mv_avg_loss[-avg_horizon:]) / avg_horizon, "loss": loss_calvin.item()}
+        
+        if args.loss_image and args.obs_pred:
+            postfix_dict["loss_image"] = loss_image.item()
+            
+        if args.control_type in ["position", "all"]:
+            postfix_dict["loss_hand"] = loss_hand_action.item()
+            postfix_dict["loss_robot"] = loss_robot_action.item()
+            
+        if args.control_type in ["pose", "all"]:
+            postfix_dict["loss_pose"] = loss_pose_action.item()
+            
+        t.set_postfix(postfix_dict)
 
 def get_checkpoint(model):
     state_dict = model.state_dict()
@@ -366,9 +360,6 @@ def eval_one_epoch_calvin(
             states = batch_calvin[4].to(device_id, dtype=cast_dtype, non_blocking=True)
             input_states = states  # Use the full state vector
             
-            # self_key_point
-            self_keypoints = None
-            
             # actions - handles hand, pose, robot components
             actions = batch_calvin[2].to(device_id, dtype=cast_dtype, non_blocking=True)
             
@@ -376,7 +367,10 @@ def eval_one_epoch_calvin(
             input_image_left = images_left[:, :args.sequence_length, :]
             input_image_right = images_right[:, :args.sequence_length, :]
             input_text_token = text_tokens[:, :args.sequence_length, :]
-            input_state = input_states[:, :args.sequence_length, :]
+            
+            input_hand_state = input_states[:, :args.sequence_length, :12] if args.control_type in ["position", "all"] else None
+            input_pose_state = input_states[:, :args.sequence_length, 12:12+27] if args.control_type in ["pose", "all"] else None
+            input_robot_state = input_states[:, :args.sequence_length, 12+27:] if args.control_type in ["position", "all"] else None
 
             # Prepare label actions for all components
             label_actions = torch.cat([actions[:, j:args.sequence_length-args.atten_goal+j, :].unsqueeze(-2) 
@@ -394,31 +388,41 @@ def eval_one_epoch_calvin(
                 hand_pred_state, pose_pred_state, robot_pred_state, loss_action = model(
                     image_left=input_image_left,
                     image_right=input_image_right,
-                    state=input_state,
+                    hand_state=input_hand_state,
+                    pose_state=input_pose_state,
+                    robot_state=input_robot_state,
                     text_token=input_text_token,
                     action=actions[:, :args.sequence_length, :],
                 )
             
-            # Calculate action losses for all three components
+            # 根据控制类型计算不同的损失
+            # Initialize losses with zero tensors
+            loss_hand_action = torch.tensor([0.0]).to(device_id)
+            loss_pose_action = torch.tensor([0.0]).to(device_id)
+            loss_robot_action = torch.tensor([0.0]).to(device_id)
+            
+            # Calculate action losses based on control_type
             if args.loss_action and args.action_pred_steps:
-                loss_hand_action = torch.nn.functional.smooth_l1_loss(
-                    hand_pred_action[:, :args.sequence_length-args.atten_goal], 
-                    label_hand_actions[:, :args.sequence_length-args.atten_goal].detach())
+                # Hand action loss (for "position" or "all" control types)
+                if args.control_type in ["position", "all"] and hand_pred_action is not None:
+                    loss_hand_action = torch.nn.functional.smooth_l1_loss(
+                        hand_pred_action[:, :args.sequence_length-args.atten_goal], 
+                        label_hand_actions[:, :args.sequence_length-args.atten_goal].detach())
                 
-                loss_pose_action = torch.nn.functional.smooth_l1_loss(
-                    pose_pred_action[:, :args.sequence_length-args.atten_goal], 
-                    label_pose_actions[:, :args.sequence_length-args.atten_goal].detach())
+                # Pose action loss (for "pose" or "all" control types)
+                if args.control_type in ["pose", "all"] and pose_pred_action is not None:
+                    loss_pose_action = torch.nn.functional.smooth_l1_loss(
+                        pose_pred_action[:, :args.sequence_length-args.atten_goal], 
+                        label_pose_actions[:, :args.sequence_length-args.atten_goal].detach())
                 
-                loss_robot_action = torch.nn.functional.smooth_l1_loss(
-                    robot_pred_action[:, :args.sequence_length-args.atten_goal], 
-                    label_robot_actions[:, :args.sequence_length-args.atten_goal].detach())
-            else:
-                loss_hand_action = torch.tensor([0.0]).to(device_id)
-                loss_pose_action = torch.tensor([0.0]).to(device_id)
-                loss_robot_action = torch.tensor([0.0]).to(device_id)
+                # Robot action loss (for "position" or "all" control types)
+                if args.control_type in ["position", "all"] and robot_pred_action is not None:
+                    loss_robot_action = torch.nn.functional.smooth_l1_loss(
+                        robot_pred_action[:, :args.sequence_length-args.atten_goal], 
+                        label_robot_actions[:, :args.sequence_length-args.atten_goal].detach())
 
             # Image loss calculation 
-            if args.loss_image and args.obs_pred:
+            if args.loss_image and args.obs_pred and image_pred is not None:
                 label_image_left = images_left[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
                 label_image_right = images_right[:, args.future_steps:args.future_steps+args.sequence_length-args.atten_goal, :].flatten(0, 1)
                 label_image_left = patchify(label_image_left, patch_size=args.patch_size)
@@ -439,7 +443,7 @@ def eval_one_epoch_calvin(
             else:
                 loss_image = torch.tensor([0.0]).to(device_id)
             
-            # Combined loss - includes all three action components
+            # Combined loss - includes all three action components based on control_type
             loss_action_combined = (
                 args.loss_hand_action_ratio * loss_hand_action + 
                 args.loss_pose_action_ratio * loss_pose_action + 
@@ -460,26 +464,38 @@ def eval_one_epoch_calvin(
             end = time.time()
             
             if args.rank == 0:
-                t.set_postfix({
-                    'val_loss': f'{val_loss_calvin.avg:.4f}',
-                    'hand_loss': f'{val_loss_hand_action.avg:.4f}',
-                    'pose_loss': f'{val_loss_pose_action.avg:.4f}',
-                    'robot_loss': f'{val_loss_robot_action.avg:.4f}',
-                    'img_loss': f'{val_loss_image.avg:.4f}'
-                })
+                # 根据控制类型显示不同的postfix
+                postfix_dict = {'val_loss': f'{val_loss_calvin.avg:.4f}'}
+                
+                if args.control_type in ["position", "all"]:
+                    postfix_dict['hand_loss'] = f'{val_loss_hand_action.avg:.4f}'
+                    postfix_dict['robot_loss'] = f'{val_loss_robot_action.avg:.4f}'
+                
+                if args.control_type in ["pose", "all"]:
+                    postfix_dict['pose_loss'] = f'{val_loss_pose_action.avg:.4f}'
+                
+                if args.loss_image and args.obs_pred:
+                    postfix_dict['img_loss'] = f'{val_loss_image.avg:.4f}'
+                
+                t.set_postfix(postfix_dict)
 
     # Log validation metrics
     if args.rank == 0 and args.report_to_wandb:
-        wandb.log(
-            {
-                "val/loss_calvin": val_loss_calvin.avg,
-                "val/loss_hand_action": val_loss_hand_action.avg,
-                "val/loss_pose_action": val_loss_pose_action.avg,
-                "val/loss_robot_action": val_loss_robot_action.avg,
-                "val/loss_image": val_loss_image.avg,
-                "val/epoch": epoch,
-            },
-        )
+        wandb_log_dict = {
+            "val/loss_calvin": val_loss_calvin.avg,
+            "val/loss_image": val_loss_image.avg,
+            "val/epoch": epoch,
+        }
+        
+        # 根据控制类型记录不同的wandb指标
+        if args.control_type in ["position", "all"]:
+            wandb_log_dict["val/loss_hand_action"] = val_loss_hand_action.avg
+            wandb_log_dict["val/loss_robot_action"] = val_loss_robot_action.avg
+            
+        if args.control_type in ["pose", "all"]:
+            wandb_log_dict["val/loss_pose_action"] = val_loss_pose_action.avg
+        
+        wandb.log(wandb_log_dict)
     
     return val_loss_calvin.avg
         
