@@ -3548,6 +3548,8 @@ class PickBottleDataset(Dataset):
         text_aug=False,
         pad=True,
         validation=False,
+        stats_file=None,
+        normalize_data=True,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.image_fn = image_fn
@@ -3587,6 +3589,10 @@ class PickBottleDataset(Dataset):
         # 初始化文件锁字典和锁管理锁
         self.file_locks = {}
         self.file_locks_lock = threading.Lock()
+
+        from utils.normalize_utils import StateActionNormalizer
+        self.normalize_data = normalize_data
+        self.normalizer = StateActionNormalizer(stats_file) if normalize_data else None
         
     def _build_file_indices(self):
         episode_lookup = []
@@ -3753,6 +3759,11 @@ class PickBottleDataset(Dataset):
         left_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_left"]) for s in sample])  # (batch, window_size, 3, 224, 224)
         right_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_right"]) for s in sample])  # (batch, window_size, 3, 224, 224)
         
+        # Apply normalization
+        if self.normalize_data and self.normalizer is not None:
+            state_tensors = self.normalizer.normalize_state(state_tensors)
+            action_tensors = self.normalizer.normalize_action(action_tensors)
+            
         stacked_language = [s["lang"] for s in sample]
         text_tensors = self.text_fn(stacked_language)
         
@@ -3821,6 +3832,10 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     else:
         dataset_dir = os.path.join(dataset_dir, "training")
     
+    # 获取统计数据文件路径
+    stats_file = getattr(args, 'dataset_statistics_file', None)
+    normalize_data = getattr(args, 'normalize_data', True)
+    
     # Create dataset
     dataset = PickBottleDataset(
         dataset_dir=dataset_dir,
@@ -3834,7 +3849,9 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
         min_window_size=args.min_window_size,
         max_window_size=args.max_window_size,
         act_step=args.multi_step_action,
-        validation=validation
+        validation=validation,
+        stats_file=stats_file,
+        normalize_data=normalize_data,
     )
     
     # Calculate batching details

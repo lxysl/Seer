@@ -106,6 +106,10 @@ class MockArgs:
         # 控制类型
         self.control_type = "position"
 
+        # 归一化数据
+        self.normalize_data = True
+        self.dataset_statistics_file = "dataset_statistics.npz"
+
 def test_train_one_epoch_calvin():
     print("开始测试 train_one_epoch_calvin 函数")
     
@@ -131,7 +135,7 @@ def test_train_one_epoch_calvin():
     
     # 创建SeerAgent模型实例
     model = SeerAgent(
-        finetune_type="real",
+        finetune_type="bottle",
         clip_device=device,
         vit_checkpoint_path=args.vit_checkpoint_path,
         sequence_length=args.sequence_length,

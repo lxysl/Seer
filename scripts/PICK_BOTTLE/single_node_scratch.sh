@@ -39,7 +39,7 @@ torchrun --nnodes=${node} --nproc_per_node=${node_num} --master_port=10211 train
     --wandb_project seer \
     --weight_decay 1e-4 \
     --num_resampler_query 6 \
-    --run_name pick_bottle_scratch \
+    --run_name pick_bottle_scratch_position \
     --save_checkpoint_path ${save_checkpoint_path} \
     --except_lang \
     --transformer_layers 24 \
@@ -56,5 +56,8 @@ torchrun --nnodes=${node} --nproc_per_node=${node_num} --master_port=10211 train
     --use_aug_data \
     --report_to_wandb \
     --control_type "position" \
+    # --use_normalization \
+    # --resume_from_checkpoint checkpoints/pick_bottle_scratch/32.pth \
+    # --wandb_run_id eocvtnr8
     # --loss_image \
 

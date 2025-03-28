@@ -252,6 +252,20 @@ def get_parser(is_eval=False):
         help="Control type: 'position' for hand/robot position control, 'pose' for end effector pose control, 'all' for both",
     )
     
+    # 添加数据归一化相关参数
+    parser.add_argument(
+        "--normalize_data", 
+        default=False, 
+        action="store_true",
+        help="whether to normalize data"
+    )
+    parser.add_argument(
+        "--dataset_statistics_file", 
+        type=str, 
+        default=None,
+        help="path to dataset statistics file (npz file containing mean and std)"
+    )
+    
     # for eval
     if is_eval:
         parser.add_argument("--calvin_conf_path", type=str, help="path to calvin configuration file")

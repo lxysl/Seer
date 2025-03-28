@@ -10,6 +10,7 @@ from einops import rearrange
 from pdb import set_trace
 import numpy as np
 import torch.distributed as dist
+from utils.normalize_utils import StateActionNormalizer
 
 
 def get_cast_dtype(precision: str):
@@ -71,6 +72,11 @@ def train_one_epoch_calvin(
     autocast = get_autocast(args.precision)
     cast_dtype = get_cast_dtype(args.precision)
     model.train()
+
+    # 初始化归一化器（如果需要）
+    normalizer = None
+    if hasattr(args, 'normalize_data') and args.normalize_data and hasattr(args, 'dataset_statistics_file') and args.dataset_statistics_file:
+        normalizer = StateActionNormalizer(args.dataset_statistics_file)
 
     # setup logging
     step_time_m = AverageMeter()  # time for one optimizer step (> 1 batch if using gradient accum)
@@ -250,16 +256,77 @@ def train_one_epoch_calvin(
                 step_time_m.reset()
                 data_time_m.reset()
 
-                wandb.log(
-                    {
-                        "loss_calvin": loss.item() * args.gradient_accumulation_steps,
-                        "loss_hand_action": loss_hand_action.item() * args.gradient_accumulation_steps,
-                        "loss_pose_action": loss_pose_action.item() * args.gradient_accumulation_steps,
-                        "loss_robot_action": loss_robot_action.item() * args.gradient_accumulation_steps,
-                        "loss_image": loss_image.item() * args.gradient_accumulation_steps,
-                        "global_step": global_step,
-                    },
-                )
+                # 如果有normalizer，为wandb计算反归一化的损失值
+                if normalizer is not None and num_steps % 100 == 0:
+                    # 创建用于显示的反归一化损失
+                    # 准备数据用于反归一化损失计算
+                    orig_hand_pred = hand_pred_action[:, :args.sequence_length-args.atten_goal].clone() if hand_pred_action is not None else None
+                    orig_pose_pred = pose_pred_action[:, :args.sequence_length-args.atten_goal].clone() if pose_pred_action is not None else None
+                    orig_robot_pred = robot_pred_action[:, :args.sequence_length-args.atten_goal].clone() if robot_pred_action is not None else None
+                    
+                    orig_hand_label = label_hand_actions[:, :args.sequence_length-args.atten_goal].clone()
+                    orig_pose_label = label_pose_actions[:, :args.sequence_length-args.atten_goal].clone()
+                    orig_robot_label = label_robot_actions[:, :args.sequence_length-args.atten_goal].clone()
+                    
+                    denorm_hand_loss_item = 0.0
+                    denorm_pose_loss_item = 0.0
+                    denorm_robot_loss_item = 0.0
+                    
+                    # 对预测和真实值进行反归一化
+                    if args.control_type in ["position", "all"] and hand_pred_action is not None:
+                        denorm_hand_pred = normalizer.denormalize_hand_action(orig_hand_pred)
+                        denorm_hand_label = normalizer.denormalize_hand_action(orig_hand_label)
+                        # 计算原始尺度下的损失
+                        denorm_hand_loss = torch.nn.functional.smooth_l1_loss(denorm_hand_pred, denorm_hand_label)
+                        denorm_hand_loss_item = denorm_hand_loss.item()
+                        
+                    if args.control_type in ["pose", "all"] and pose_pred_action is not None:
+                        denorm_pose_pred = normalizer.denormalize_pose_action(orig_pose_pred)
+                        denorm_pose_label = normalizer.denormalize_pose_action(orig_pose_label)
+                        # 计算原始尺度下的损失
+                        denorm_pose_loss = torch.nn.functional.smooth_l1_loss(denorm_pose_pred, denorm_pose_label)
+                        denorm_pose_loss_item = denorm_pose_loss.item()
+                        
+                    if args.control_type in ["position", "all"] and robot_pred_action is not None:
+                        denorm_robot_pred = normalizer.denormalize_robot_action(orig_robot_pred)
+                        denorm_robot_label = normalizer.denormalize_robot_action(orig_robot_label)
+                        # 计算原始尺度下的损失
+                        denorm_robot_loss = torch.nn.functional.smooth_l1_loss(denorm_robot_pred, denorm_robot_label)
+                        denorm_robot_loss_item = denorm_robot_loss.item()
+                    
+                    # 合并反归一化后的损失
+                    denorm_loss_action_combined = (
+                        args.loss_hand_action_ratio * denorm_hand_loss_item + 
+                        args.loss_pose_action_ratio * denorm_pose_loss_item + 
+                        args.loss_robot_action_ratio * denorm_robot_loss_item
+                    )
+                    
+                    # 记录反归一化后的损失
+                    wandb.log(
+                        {
+                            "norm_loss_calvin": loss.item() * args.gradient_accumulation_steps,  # use `norm_loss_xxx` to indicate the loss is normalized
+                            "norm_loss_hand_action": loss_hand_action.item() * args.gradient_accumulation_steps,
+                            "norm_loss_pose_action": loss_pose_action.item() * args.gradient_accumulation_steps,
+                            "norm_loss_robot_action": loss_robot_action.item() * args.gradient_accumulation_steps,
+                            "loss_image": loss_image.item() * args.gradient_accumulation_steps,
+                            "loss_calvin": denorm_loss_action_combined + args.loss_image_ratio * loss_image.item(),  # use `loss_xxx` to indicate the loss is denormalized
+                            "loss_hand_action": denorm_hand_loss_item,
+                            "loss_pose_action": denorm_pose_loss_item,
+                            "loss_robot_action": denorm_robot_loss_item,
+                            "global_step": global_step,
+                        },
+                    )
+                else:
+                    wandb.log(
+                        {
+                            "loss_calvin": loss.item() * args.gradient_accumulation_steps,
+                            "loss_hand_action": loss_hand_action.item() * args.gradient_accumulation_steps,
+                            "loss_pose_action": loss_pose_action.item() * args.gradient_accumulation_steps,
+                            "loss_robot_action": loss_robot_action.item() * args.gradient_accumulation_steps,
+                            "loss_image": loss_image.item() * args.gradient_accumulation_steps,
+                            "global_step": global_step,
+                        },
+                    )
 
         avg_horizon = min(100, len(mv_avg_loss))
         # 根据控制类型显示不同的损失
@@ -323,6 +390,11 @@ def eval_one_epoch_calvin(
     cast_dtype = get_cast_dtype(args.precision)
     model.eval()
 
+    # 初始化归一化器（如果需要）
+    normalizer = None
+    if hasattr(args, 'normalize_data') and args.normalize_data and hasattr(args, 'dataset_statistics_file') and args.dataset_statistics_file:
+        normalizer = StateActionNormalizer(args.dataset_statistics_file)
+
     # setup logging
     step_time_m = AverageMeter()  # time for one step
     data_time_m = AverageMeter()  # avg time to load one batch
@@ -335,6 +407,12 @@ def eval_one_epoch_calvin(
     val_loss_robot_action = AverageMeter()
     val_loss_image = AverageMeter()
     val_loss_calvin = AverageMeter()
+    
+    # 反归一化损失的指标
+    denorm_val_loss_hand_action = AverageMeter()
+    denorm_val_loss_pose_action = AverageMeter()
+    denorm_val_loss_robot_action = AverageMeter()
+    denorm_val_loss_calvin = AverageMeter()
     
     # loop through dataloader
     t = tqdm(
@@ -459,6 +537,54 @@ def eval_one_epoch_calvin(
             val_loss_image.update(loss_image.item())
             val_loss_calvin.update(loss_calvin.item())
             
+            # 计算反归一化的损失指标（如果有normalizer）
+            if normalizer is not None:
+                # 准备数据用于反归一化损失计算
+                orig_hand_pred = hand_pred_action[:, :args.sequence_length-args.atten_goal].clone() if hand_pred_action is not None else None
+                orig_pose_pred = pose_pred_action[:, :args.sequence_length-args.atten_goal].clone() if pose_pred_action is not None else None
+                orig_robot_pred = robot_pred_action[:, :args.sequence_length-args.atten_goal].clone() if robot_pred_action is not None else None
+                
+                orig_hand_label = label_hand_actions[:, :args.sequence_length-args.atten_goal].clone()
+                orig_pose_label = label_pose_actions[:, :args.sequence_length-args.atten_goal].clone()
+                orig_robot_label = label_robot_actions[:, :args.sequence_length-args.atten_goal].clone()
+                
+                denorm_hand_loss_item = 0.0
+                denorm_pose_loss_item = 0.0
+                denorm_robot_loss_item = 0.0
+                
+                # 对预测和真实值进行反归一化
+                if args.control_type in ["position", "all"] and hand_pred_action is not None:
+                    denorm_hand_pred = normalizer.denormalize_hand_action(orig_hand_pred)
+                    denorm_hand_label = normalizer.denormalize_hand_action(orig_hand_label)
+                    # 计算原始尺度下的损失
+                    denorm_hand_loss = torch.nn.functional.smooth_l1_loss(denorm_hand_pred, denorm_hand_label)
+                    denorm_hand_loss_item = denorm_hand_loss.item()
+                    denorm_val_loss_hand_action.update(denorm_hand_loss_item)
+                
+                if args.control_type in ["pose", "all"] and pose_pred_action is not None:
+                    denorm_pose_pred = normalizer.denormalize_pose_action(orig_pose_pred)
+                    denorm_pose_label = normalizer.denormalize_pose_action(orig_pose_label)
+                    # 计算原始尺度下的损失
+                    denorm_pose_loss = torch.nn.functional.smooth_l1_loss(denorm_pose_pred, denorm_pose_label)
+                    denorm_pose_loss_item = denorm_pose_loss.item()
+                    denorm_val_loss_pose_action.update(denorm_pose_loss_item)
+
+                if args.control_type in ["position", "all"] and robot_pred_action is not None:
+                    denorm_robot_pred = normalizer.denormalize_robot_action(orig_robot_pred)
+                    denorm_robot_label = normalizer.denormalize_robot_action(orig_robot_label)
+                    # 计算原始尺度下的损失
+                    denorm_robot_loss = torch.nn.functional.smooth_l1_loss(denorm_robot_pred, denorm_robot_label)
+                    denorm_robot_loss_item = denorm_robot_loss.item()
+                    denorm_val_loss_robot_action.update(denorm_robot_loss_item)
+
+                # 合并反归一化后的损失
+                denorm_loss_combined = (
+                    args.loss_hand_action_ratio * denorm_hand_loss_item + 
+                    args.loss_pose_action_ratio * denorm_pose_loss_item + 
+                    args.loss_robot_action_ratio * denorm_robot_loss_item
+                )
+                denorm_val_loss_calvin.update(denorm_loss_combined + args.loss_image_ratio * loss_image.item())
+            
             # step time and reset end outside of rank 0
             step_time_m.update(time.time() - end)
             end = time.time()
@@ -482,18 +608,29 @@ def eval_one_epoch_calvin(
     # Log validation metrics
     if args.rank == 0 and args.report_to_wandb:
         wandb_log_dict = {
-            "val/loss_calvin": val_loss_calvin.avg,
+            "val/norm_loss_calvin": val_loss_calvin.avg,  # use `norm_loss_xxx` to indicate the loss is normalized
             "val/loss_image": val_loss_image.avg,
             "val/epoch": epoch,
         }
         
         # 根据控制类型记录不同的wandb指标
         if args.control_type in ["position", "all"]:
-            wandb_log_dict["val/loss_hand_action"] = val_loss_hand_action.avg
-            wandb_log_dict["val/loss_robot_action"] = val_loss_robot_action.avg
+            wandb_log_dict["val/norm_loss_hand_action"] = val_loss_hand_action.avg
+            wandb_log_dict["val/norm_loss_robot_action"] = val_loss_robot_action.avg
             
         if args.control_type in ["pose", "all"]:
-            wandb_log_dict["val/loss_pose_action"] = val_loss_pose_action.avg
+            wandb_log_dict["val/norm_loss_pose_action"] = val_loss_pose_action.avg
+        
+        # 添加反归一化的损失指标
+        if normalizer is not None:
+            wandb_log_dict["val/loss_calvin"] = denorm_val_loss_calvin.avg  # use `loss_xxx` to indicate the loss is denormalized
+            
+            if args.control_type in ["position", "all"]:
+                wandb_log_dict["val/loss_hand_action"] = denorm_val_loss_hand_action.avg
+                wandb_log_dict["val/loss_robot_action"] = denorm_val_loss_robot_action.avg
+                
+            if args.control_type in ["pose", "all"]:
+                wandb_log_dict["val/loss_pose_action"] = denorm_val_loss_pose_action.avg
         
         wandb.log(wandb_log_dict)
     
