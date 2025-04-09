@@ -3895,7 +3895,7 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
 
 
 if __name__ == "__main__":
-    from arguments_utils import get_parser
+    from utils.arguments_utils import get_parser
     from tqdm import tqdm
     parser = get_parser()
     args = parser.parse_args()

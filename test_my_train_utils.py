@@ -5,6 +5,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import wandb
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from transformers import get_cosine_schedule_with_warmup
@@ -110,6 +111,8 @@ class MockArgs:
         self.normalize_data = True
         self.dataset_statistics_file = "dataset_statistics.npz"
 
+        self.report_to_wandb = True
+
 def test_train_one_epoch_calvin():
     print("开始测试 train_one_epoch_calvin 函数")
     
@@ -176,7 +179,10 @@ def test_train_one_epoch_calvin():
     )
     
     # 如果使用wandb，在这里可以添加模拟的wandb对象
-    mock_wandb = None
+    if args.report_to_wandb:
+        mock_wandb = wandb.init(project="seer", name="test")
+    else:
+        mock_wandb = None
     
     # 执行训练一个epoch
     try:

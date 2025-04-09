@@ -257,7 +257,7 @@ def train_one_epoch_calvin(
                 data_time_m.reset()
 
                 # 如果有normalizer，为wandb计算反归一化的损失值
-                if normalizer is not None and num_steps % 100 == 0:
+                if normalizer is not None:
                     # 创建用于显示的反归一化损失
                     # 准备数据用于反归一化损失计算
                     orig_hand_pred = hand_pred_action[:, :args.sequence_length-args.atten_goal].clone() if hand_pred_action is not None else None
