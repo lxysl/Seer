@@ -4,10 +4,7 @@ import numpy as np
 from glob import glob
 from tqdm import tqdm
 
-def calculate_dataset_statistics():
-    # 数据集根目录，根据实际情况修改
-    root_dir = "/home/gjt/yanchi/teleoperation_dds/data/recordings/pick_bottle"
-    
+def calculate_dataset_statistics(root_dir):
     # 查找所有时间命名的文件夹
     folders = glob(os.path.join(root_dir, "????-??-??_??-??-??"))
     
@@ -140,8 +137,10 @@ def generate_mock_statistics():
 
 
 if __name__ == "__main__":
-    # stats = calculate_dataset_statistics()
+    # 数据集根目录，根据实际情况修改
+    root_dir = "/home/gjt/yanchi/teleoperation_dds/data/recordings/pick_bottle"
 
+    # stats = calculate_dataset_statistics(root_dir)
     stats = generate_mock_statistics()
 
     # 打印部分统计结果示例

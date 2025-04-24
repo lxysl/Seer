@@ -9,10 +9,10 @@ import wandb
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from transformers import get_cosine_schedule_with_warmup
-from models.my_seer_model import SeerAgent
+from models.seer_model import SeerAgent
 
 # 导入测试目标函数
-from utils.my_train_utils import train_one_epoch_calvin, AverageMeter
+from utils.train_utils import train_one_epoch_calvin, AverageMeter
 
 # 创建模拟数据集类
 class MockCalvinDataset(Dataset):
@@ -39,12 +39,12 @@ class MockCalvinDataset(Dataset):
         text_tokens = torch.randint(0, 49408, (self.batch_size, 77))
         
         # 创建模拟动作数据
-        actions = torch.rand(self.batch_size, self.window_size, 65)
+        actions = torch.rand(self.batch_size, self.window_size, 7)
         for i in range(self.window_size):
             actions[:, i, :].fill_(float(i))
         
         # 创建模拟状态数据
-        states = torch.rand(self.batch_size, self.window_size, 68)
+        states = torch.rand(self.batch_size, self.window_size, 7)
         for i in range(self.window_size):
             states[:, i, :].fill_(float(i) * -1.0)
         
@@ -78,7 +78,7 @@ class MockArgs:
         # 基本参数
         self.sequence_length = 7
         self.window_size = 10
-        self.batch_size = 1
+        self.batch_size = 2
         self.gradient_accumulation_steps = 1
         self.num_epochs = 1
         self.precision = "fp32"
@@ -95,6 +95,8 @@ class MockArgs:
         self.patch_size = 16
         self.atten_only_obs = False
         self.attn_robot_proprio_state = False
+
+        self.gripper_width = False
         
         # 损失函数相关参数
         self.loss_hand_action_ratio = 1.0
@@ -114,8 +116,6 @@ class MockArgs:
         # 归一化数据
         self.normalize_data = False
         self.dataset_statistics_file = "dataset_statistics.npz"
-
-        self.report_to_wandb = True
 
 def test_train_one_epoch_calvin():
     print("开始测试 train_one_epoch_calvin 函数")
@@ -161,7 +161,6 @@ def test_train_one_epoch_calvin():
         hidden_dim=384,
         transformer_heads=12,
         phase="finetune",
-        control_type=args.control_type
     ).to(device)
     
     # 初始化模型类型

@@ -6,6 +6,10 @@ evaluate
 wandb
 ckpt
 .vscode
+.DS_Store
+pick_bottle_data_fix
+*.npz
+*.hdf5
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

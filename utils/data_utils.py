@@ -3550,6 +3550,7 @@ class PickBottleDataset(Dataset):
         validation=False,
         stats_file=None,
         normalize_data=True,
+        image_size=224,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.image_fn = image_fn
@@ -3557,6 +3558,7 @@ class PickBottleDataset(Dataset):
         self.window_size = window_size
         self.act_step = act_step
         self.pad = pad
+        self.image_size = image_size
         
         if not dif_ws:
             self.min_window_size = window_size + act_step - 1
@@ -3715,8 +3717,8 @@ class PickBottleDataset(Dataset):
         sequence = {
             "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
             "rgb_obs": {
-                "rgb_left": [Image.fromarray(frame) for frame in episode["rgb_left"]],
-                "rgb_right": [Image.fromarray(frame) for frame in episode["rgb_right"]]
+                "rgb_left": [Image.fromarray(frame).resize((self.image_size, self.image_size)) for frame in episode["rgb_left"]],
+                "rgb_right": [Image.fromarray(frame).resize((self.image_size, self.image_size)) for frame in episode["rgb_right"]]
             },
             "actions": torch.tensor(episode["actions"], dtype=torch.float32),
             "lang": episode["language"],

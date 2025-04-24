@@ -21,11 +21,11 @@ class StateActionNormalizer:
             stats_file_path: 包含均值和标准差的npz文件路径
         """
         self.hand_action_dim = 12
-        self.pose_action_dim = 24
+        self.pose_action_dim = 38
         self.robot_action_dim = 29
 
         self.hand_state_dim = 12
-        self.pose_state_dim = 27
+        self.pose_state_dim = 41
         self.robot_state_dim = 29
 
         try:

@@ -607,30 +607,28 @@ def eval_one_epoch_calvin(
 
     # Log validation metrics
     if args.rank == 0 and args.report_to_wandb:
-        wandb_log_dict = {
-            "val/norm_loss_calvin": val_loss_calvin.avg,  # use `norm_loss_xxx` to indicate the loss is normalized
-            "val/loss_image": val_loss_image.avg,
-            "val/epoch": epoch,
-        }
-        
-        # 根据控制类型记录不同的wandb指标
-        if args.control_type in ["position", "all"]:
-            wandb_log_dict["val/norm_loss_hand_action"] = val_loss_hand_action.avg
-            wandb_log_dict["val/norm_loss_robot_action"] = val_loss_robot_action.avg
-            
-        if args.control_type in ["pose", "all"]:
-            wandb_log_dict["val/norm_loss_pose_action"] = val_loss_pose_action.avg
-        
-        # 添加反归一化的损失指标
         if normalizer is not None:
-            wandb_log_dict["val/loss_calvin"] = denorm_val_loss_calvin.avg  # use `loss_xxx` to indicate the loss is denormalized
-            
-            if args.control_type in ["position", "all"]:
-                wandb_log_dict["val/loss_hand_action"] = denorm_val_loss_hand_action.avg
-                wandb_log_dict["val/loss_robot_action"] = denorm_val_loss_robot_action.avg
-                
-            if args.control_type in ["pose", "all"]:
-                wandb_log_dict["val/loss_pose_action"] = denorm_val_loss_pose_action.avg
+            wandb_log_dict = {
+                "val/norm_loss_calvin": val_loss_calvin.avg,  # use `norm_loss_xxx` to indicate the loss is normalized
+                "val/norm_loss_hand_action": val_loss_hand_action.avg,
+                "val/norm_loss_robot_action": val_loss_robot_action.avg,
+                "val/norm_loss_pose_action": val_loss_pose_action.avg,
+                "val/loss_calvin": denorm_val_loss_calvin.avg,  # use `loss_xxx` to indicate the loss is denormalized
+                "val/loss_hand_action": denorm_val_loss_hand_action.avg,
+                "val/loss_robot_action": denorm_val_loss_robot_action.avg,
+                "val/loss_pose_action": denorm_val_loss_pose_action.avg,
+                "val/loss_image": val_loss_image.avg,
+                "val/epoch": epoch,
+            }
+        else:
+            wandb_log_dict = {
+                "val/loss_calvin": val_loss_calvin.avg,
+                "val/loss_hand_action": val_loss_hand_action.avg,
+                "val/loss_robot_action": val_loss_robot_action.avg,
+                "val/loss_pose_action": val_loss_pose_action.avg,
+                "val/loss_image": val_loss_image.avg,
+                "val/epoch": epoch,
+            }
         
         wandb.log(wandb_log_dict)
     
