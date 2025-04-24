@@ -35,7 +35,7 @@ from torch.utils.data.distributed import DistributedSampler
 try:
     from petrel_client.client import Client
 except:
-    pass 
+    pass
 from omegaconf import DictConfig
 import torch
 from torch.utils.data import Dataset
@@ -460,14 +460,14 @@ class BaseCalvinDataset(Dataset):
             self.max_window_size = max_window_size
         self.act_step = act_step
         self.abs_datasets_dir = datasets_dir
-        self.lang_folder = lang_folder  
+        self.lang_folder = lang_folder
         self.aux_lang_loss_window = aux_lang_loss_window
         self.traj_cons = traj_cons
         self.data_in_ceph = data_in_ceph
         if self.data_in_ceph:
             self.conf_path = '~/petreloss.conf'
             self.client = Client(self.conf_path)
-       
+
         with open('./utils/enrich_lang_annotations.json', 'r') as f:
             self.enrich_lang = json.load(f)
         self.text_aug = text_aug
@@ -517,7 +517,7 @@ class BaseCalvinDataset(Dataset):
                 seq_rgb_obs_ = torch.from_numpy(
                     rgb_obs[seq_idx : seq_idx + window_size]
                 ).byte()
-            
+
             if rgb_obs_key in transforms:
                 seq_rgb_obs_ = transforms[rgb_obs_key](seq_rgb_obs_)
             seq_rgb_obs_dict[rgb_obs_key] = seq_rgb_obs_
@@ -553,14 +553,14 @@ class BaseCalvinDataset(Dataset):
                 raise ValueError
         else:
             idx, window_size = idx
-        
+
         head = False
         sequence = self._get_sequences(idx, window_size, head=head)
 
         if self.pad:
             pad_size = self._get_pad_size(sequence)
             sequence = self._pad_sequence(sequence, pad_size, head=head)
-        
+
         import copy
         new_list = []
         np_rgb = copy.deepcopy(sequence["rgb_obs"]["rgb_static"].numpy())
@@ -603,8 +603,8 @@ class BaseCalvinDataset(Dataset):
             **seq_acts,
             **info,
             **seq_lang,
-        }  
-        seq_dict["idx"] = idx  
+        }
+        seq_dict["idx"] = idx
 
         return seq_dict
 
@@ -853,7 +853,7 @@ class DiskCalvinDataset(BaseCalvinDataset):
             self.naming_pattern, self.n_digits = lookup_naming_pattern(
                 self.abs_datasets_dir, self.save_format
             )
-    
+
     def ceph_lookup_naming_pattern(self):
         filenames = self.client.list(self.abs_datasets_dir)
         for filename in filenames:
@@ -979,7 +979,7 @@ class DiskCalvinDataset(BaseCalvinDataset):
                 )
             assert end_idx >= self.max_window_size
             cnt = 0
-            
+
             for idx in range(start_idx, end_idx + 1 - self.min_window_size):
                 if cnt % self.skip_frames == 0:
                     lang_lookup.append(i)
@@ -1057,7 +1057,7 @@ class DiskCalvinDataset(BaseCalvinDataset):
         gripper_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_gripper"]) for s in sample])
         stacked_language = [s["lang"] for s in sample]
         text_tensors = self.text_fn(stacked_language)
-        
+
         if self.rgb_pad != -1:
             bs, seq_len = image_tensors.shape[:2]
             if self.traj_cons:
@@ -1074,9 +1074,9 @@ class DiskCalvinDataset(BaseCalvinDataset):
                 gripper_tensors = gripper_tensors.view(bs * seq_len, *gripper_tensors.shape[2:])
                 gripper_tensors = self.gripper_shift(gripper_tensors)
                 gripper_tensors = gripper_tensors.view(bs, seq_len, *gripper_tensors.shape[1:])
-        
+
         robot_obs = torch.zeros(1)
-        
+
         if self.act_step != 1:
             actions = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, action_tensors.shape[-1]))
             for b in range(action_tensors.shape[0]):
@@ -1091,7 +1091,7 @@ class DiskCalvinDataset(BaseCalvinDataset):
             image_tensors = image_tensors[:, :-(self.act_step-1)]
             gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
-        
+
         return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
     def load_pkl(self, filename):
@@ -1254,7 +1254,7 @@ class BaseDroidDataset(Dataset):
         primary_mode: str = "image_primary",
         dataset_info: str = "droid_success",
         small_size: int = 0,
-        data_in_ceph: bool = False, 
+        data_in_ceph: bool = False,
         max_rel_pos: float = 0.02,
         max_rel_orn: float = 0.05,
         magic_scaling_factor_pos: float = 1.0,
@@ -1262,10 +1262,10 @@ class BaseDroidDataset(Dataset):
         **kwargs: Any,
     ):
         super().__init__()
-        self.dataset_name = dataset_name 
+        self.dataset_name = dataset_name
         self.dataset_info = dataset_info
-        self.root_dir = root_dir 
-        self.dataset_path = f'{root_dir}/{dataset_name}' 
+        self.root_dir = root_dir
+        self.dataset_path = f'{root_dir}/{dataset_name}'
         self.conf_path = '~/petreloss.conf'
         self.client = Client(self.conf_path)
         self.image_primary_size = image_primary_size
@@ -1286,7 +1286,7 @@ class BaseDroidDataset(Dataset):
             self.max_window_size = window_size + act_step - 1
         else:
             raise NotImplementedError
-        
+
         assert self.max_window_size == self.min_window_size
         self.aux_lang_loss_window = aux_lang_loss_window
         self.text_aug = text_aug
@@ -1335,7 +1335,7 @@ class BaseDroidDataset(Dataset):
                 seq_rgb_obs_ = torch.from_numpy(
                     rgb_obs[seq_idx : seq_idx + window_size]
                 ).byte()
-            
+
             if rgb_obs_key in transforms:
                 seq_rgb_obs_ = transforms[rgb_obs_key](seq_rgb_obs_)
             seq_rgb_obs_dict[rgb_obs_key] = seq_rgb_obs_
@@ -1476,7 +1476,7 @@ class BaseDroidDataset(Dataset):
         Returns:
             Loaded sequence.
         """
-        if isinstance(idx, int): 
+        if isinstance(idx, int):
             if self.min_window_size == self.max_window_size:
                 window_size = self.max_window_size
             else:
@@ -1539,7 +1539,7 @@ class BaseDroidDataset(Dataset):
             data_dict["robot_obs"] = self.load_robot_obs(other_h5_file)
             data_dict["scene_obs"] = self.load_scene_obs(episode_id, step_id)
             episodes.append(data_dict)
-   
+
         keys = list(chain(*self.observation_space.values()))
         keys.remove("language")
         keys.append("scene_obs")
@@ -1561,8 +1561,8 @@ class BaseDroidDataset(Dataset):
             **seq_acts,
             **info,
             **seq_lang,
-        }  
-        seq_dict["idx"] = idx  
+        }
+        seq_dict["idx"] = idx
         seq_dict["droid_episode_id"] = episode_id
 
         return seq_dict
@@ -1581,7 +1581,7 @@ class BaseDroidDataset(Dataset):
         if self.data_in_ceph:
             image_wrist = self.client.get(image_wrist, enable_cache=True)
             image_wrist = io.BytesIO(image_wrist)
-        image_wrist = np.array(Image.open(image_wrist).convert("RGB")) 
+        image_wrist = np.array(Image.open(image_wrist).convert("RGB"))
 
         return image_wrist.astype(np.uint8)
 
@@ -1592,7 +1592,7 @@ class BaseDroidDataset(Dataset):
             language_instruction = "No language instruction."
 
         return language_instruction
-        
+
     def load_action(self, other_h5_file, max_rel_pos=0.02, max_rel_orn=0.05, magic_scaling_factor_pos=1.0, magic_scaling_factor_orn=1.0):
         action = other_h5_file["action_delta_wrist_pose"][()]
         action[:3] /= (self.max_rel_pos * self.magic_scaling_factor_pos)
@@ -1621,7 +1621,7 @@ class BaseDroidDataset(Dataset):
 
 class DistDroidDataset(Dataset):
     def __init__(
-        self, 
+        self,
         image_fn: Callable,
         text_fn: Callable,
         dataset_names: List[str],
@@ -1630,19 +1630,19 @@ class DistDroidDataset(Dataset):
         gripper_pad: int = -1,
         traj_cons: bool = False,
         act_step : int = 1,
-        small_size: int = 0, 
+        small_size: int = 0,
         **kwargs: Any,
     ):
         super().__init__()
         self.dataset_names = dataset_names
         self.datasets = [
             BaseDroidDataset(
-                *args, 
+                *args,
                 dataset_name=dataset_name,
                 act_step=act_step,
                 small_size=small_size,
                 **kwargs,
-                
+
             ) for dataset_name in dataset_names
         ]
         self.image_fn = image_fn
@@ -1715,7 +1715,7 @@ class DistDroidDataset(Dataset):
             gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
 
-        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs 
+        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
 def get_droid_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     dataset_names = ["droid_success"]
@@ -1754,7 +1754,7 @@ def get_droid_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     global_batch_size = args.batch_size * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
-    num_worker_batches = round_fn(num_batches / num_workers)  
+    num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
     sampler = DistributedSampler(
@@ -1805,15 +1805,15 @@ class BaseLiberoDataset(Dataset):
         dataset_info: str = "libero",
         small_size: int = 0,
         gripper_width: bool = False,
-        load_libero_file: str = "h5", 
+        load_libero_file: str = "h5",
         **kwargs: Any,
     ):
         super().__init__()
-        
+
         self.dataset_name = dataset_name
         self.dataset_info = dataset_info
-        self.root_dir = root_dir 
-        self.dataset_path = f'{root_dir}/{dataset_name}' 
+        self.root_dir = root_dir
+        self.dataset_path = f'{root_dir}/{dataset_name}'
         self.conf_path = '~/petreloss.conf'
         self.image_primary_size = image_primary_size
         self.image_wrist_size = image_wrist_size
@@ -1833,7 +1833,7 @@ class BaseLiberoDataset(Dataset):
             self.max_window_size = window_size + act_step - 1
         else:
             raise NotImplementedError
-        
+
         assert self.max_window_size == self.min_window_size
         self.aux_lang_loss_window = aux_lang_loss_window
         self.text_aug = text_aug
@@ -1875,7 +1875,7 @@ class BaseLiberoDataset(Dataset):
                 seq_rgb_obs_ = torch.from_numpy(
                     rgb_obs[seq_idx : seq_idx + window_size]
                 ).byte()
-            
+
             if rgb_obs_key in transforms:
                 seq_rgb_obs_ = transforms[rgb_obs_key](seq_rgb_obs_)
             seq_rgb_obs_dict[rgb_obs_key] = seq_rgb_obs_
@@ -2094,8 +2094,8 @@ class BaseLiberoDataset(Dataset):
             **seq_acts,
             **info,
             **seq_lang,
-        }  
-        seq_dict["idx"] = idx  
+        }
+        seq_dict["idx"] = idx
         seq_dict["episode_id"] = episode_id
 
         return seq_dict
@@ -2121,7 +2121,7 @@ class BaseLiberoDataset(Dataset):
             raise NotImplementedError
 
         return language_instruction
-        
+
     def load_action(self, other_file, max_rel_pos=0.02, max_rel_orn=0.05, magic_scaling_factor_pos=1.0, magic_scaling_factor_orn=1.0):
         if self.load_libero_file == "h5":
             action = other_file["action"][()]
@@ -2129,7 +2129,7 @@ class BaseLiberoDataset(Dataset):
             action = other_file["action"]
         else:
             raise NotImplementedError
-        
+
         return action
 
     def load_robot_obs(self, other_file):
@@ -2153,7 +2153,7 @@ class BaseLiberoDataset(Dataset):
             if self.gripper_width:
                 robot_obs[-2:] = other_file["observation_gripper_position"]
         else:
-            raise NotImplementedError      
+            raise NotImplementedError
 
         return robot_obs
 
@@ -2170,7 +2170,7 @@ class BaseLiberoDataset(Dataset):
 
 class DiskLiberoDataset(Dataset):
     def __init__(
-        self, 
+        self,
         image_fn: Callable,
         text_fn: Callable,
         dataset_names: List[str],
@@ -2179,7 +2179,7 @@ class DiskLiberoDataset(Dataset):
         gripper_pad: int = -1,
         traj_cons: bool = False,
         act_step : int = 1,
-        small_size: int = 0, 
+        small_size: int = 0,
         gripper_width: bool = False,
         **kwargs: Any,
     ):
@@ -2187,13 +2187,13 @@ class DiskLiberoDataset(Dataset):
         self.dataset_names = dataset_names
         self.datasets = [
             BaseLiberoDataset(
-                *args, 
+                *args,
                 dataset_name=dataset_name,
                 act_step=act_step,
                 small_size=small_size,
                 gripper_width=gripper_width,
                 **kwargs,
-                
+
             ) for dataset_name in dataset_names
         ]
         self.image_fn = image_fn
@@ -2215,7 +2215,7 @@ class DiskLiberoDataset(Dataset):
 
     def __len__(self):
         return self.accumulated_length_each_dataset[-1]
-    
+
     def __getitem__(self, idx):
         dataset_id = bisect.bisect_right(self.accumulated_length_each_dataset, idx)
         if dataset_id - 1 >= 0:
@@ -2250,11 +2250,11 @@ class DiskLiberoDataset(Dataset):
                 gripper_tensors = gripper_tensors.view(bs * seq_len, *gripper_tensors.shape[2:])
                 gripper_tensors = self.gripper_shift(gripper_tensors)
                 gripper_tensors = gripper_tensors.view(bs, seq_len, *gripper_tensors.shape[1:])
-        
+
         robot_obs = torch.zeros(1)
 
         if self.act_step != 1:
-        
+
             actions = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, action_tensors.shape[-1]))
             for b in range(action_tensors.shape[0]):
                 for ix in range(self.window_size):
@@ -2271,7 +2271,7 @@ class DiskLiberoDataset(Dataset):
             gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
 
-        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs 
+        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
 def get_libero_pretrain_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     dataset_names = ["libero_90_converted"]
@@ -2308,7 +2308,7 @@ def get_libero_pretrain_dataset(args, image_processor, tokenizer, epoch=0, floor
     global_batch_size = args.batch_size * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
-    num_worker_batches = round_fn(num_batches / num_workers)  
+    num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
     sampler = DistributedSampler(
@@ -2370,7 +2370,7 @@ def get_libero_finetune_dataset(args, image_processor, tokenizer, epoch=0, floor
     global_batch_size = args.batch_size * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
-    num_worker_batches = round_fn(num_batches / num_workers)  
+    num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
     sampler = DistributedSampler(
@@ -2421,7 +2421,7 @@ class BaseRealDataset(Dataset):
         dataset_info: str = "",
         small_size: int = 0,
         gripper_width: bool = False,
-        load_real_file: str = "npz", 
+        load_real_file: str = "npz",
         max_rel_pos: float = 0.02,
         max_rel_orn: float = 0.05,
         magic_scaling_factor_pos: float = 1.0,
@@ -2431,7 +2431,7 @@ class BaseRealDataset(Dataset):
     ):
         self.dataset_name = dataset_name
         self.dataset_info = dataset_info
-        self.root_dir = root_dir 
+        self.root_dir = root_dir
         self.dataset_path = f'{root_dir}/{dataset_name}'
         self.conf_path = '~/petreloss.conf'
         self.image_primary_size = image_primary_size
@@ -2497,7 +2497,7 @@ class BaseRealDataset(Dataset):
                 seq_rgb_obs_ = torch.from_numpy(
                     rgb_obs[seq_idx : seq_idx + window_size]
                 ).byte()
-            
+
             if rgb_obs_key in transforms:
                 seq_rgb_obs_ = transforms[rgb_obs_key](seq_rgb_obs_)
             seq_rgb_obs_dict[rgb_obs_key] = seq_rgb_obs_
@@ -2681,7 +2681,7 @@ class BaseRealDataset(Dataset):
         if self.use_aug_data:
             demo_list = self.episode_info_list[episode_id][2:]
             start_id, end_id = demo_list[start_id]
-        episode_id = self.episode_list[episode_id] 
+        episode_id = self.episode_list[episode_id]
         exp_id = episode_id.split("/")[0]
         episodes = []
         for step_id in range(start_id, end_id):
@@ -2724,8 +2724,8 @@ class BaseRealDataset(Dataset):
             **seq_acts,
             **info,
             **seq_lang,
-        }  
-        seq_dict["idx"] = idx  
+        }
+        seq_dict["idx"] = idx
         seq_dict["episode_id"] = episode_id
 
         return seq_dict
@@ -2733,13 +2733,13 @@ class BaseRealDataset(Dataset):
     def load_primary_rgb(self, episode_id, step_id, primary_mode="image_primary"):
         image_primary_path = f'{self.dataset_path}/{episode_id}/steps/{step_id}/{primary_mode}.jpg'
         image_primary = np.array(Image.open(image_primary_path).convert("RGB"))
-        
+
         return image_primary.astype(np.uint8)
 
     def load_wrist_rgb(self, episode_id, step_id):
         image_wrist_path = f'{self.dataset_path}/{episode_id}/steps/{step_id}/image_wrist.jpg'
         image_wrist = np.array(Image.open(image_wrist_path).convert("RGB"))
-        
+
         return image_wrist.astype(np.uint8)
 
     def load_language_instruction(self, other_file, language_mode="language_instruction"):
@@ -2747,7 +2747,7 @@ class BaseRealDataset(Dataset):
             language_instruction = other_file[language_mode].tobytes().decode('utf-8')
         else:
             raise NotImplementedError
-        
+
         return language_instruction
 
     def load_action(self, other_file, exp_id):
@@ -2757,7 +2757,7 @@ class BaseRealDataset(Dataset):
             action[3:6] /= (self.max_rel_orn * self.magic_scaling_factor_orn)
         else:
             raise NotImplementedError
-        
+
         return action
 
     def load_robot_obs(self, other_file):
@@ -2767,13 +2767,13 @@ class BaseRealDataset(Dataset):
             robot_obs[-1] = other_file["gripper_open_state"]
             robot_obs[7:14] = other_file["joints"]
         else:
-            raise NotImplementedError        
-        
+            raise NotImplementedError
+
         return robot_obs
 
     def load_scene_obs(self, episode_id, step_id):
         scene_obs = np.zeros(self.proprio_state.n_scene_obs)
-        
+
         return scene_obs
 
     def __len__(self):
@@ -2784,7 +2784,7 @@ class BaseRealDataset(Dataset):
 
 class DiskRealDataset(Dataset):
     def __init__(
-        self, 
+        self,
         image_fn: Callable,
         text_fn: Callable,
         dataset_names: List[str],
@@ -2793,7 +2793,7 @@ class DiskRealDataset(Dataset):
         gripper_pad: int = -1,
         traj_cons: bool = False,
         act_step : int = 1,
-        small_size: int = 0, 
+        small_size: int = 0,
         gripper_width: bool = False,
         **kwargs: Any,
     ):
@@ -2801,13 +2801,13 @@ class DiskRealDataset(Dataset):
         self.dataset_names = dataset_names
         self.datasets = [
                 BaseRealDataset(
-                    *args, 
+                    *args,
                     dataset_name=dataset_name,
                     act_step=act_step,
                     small_size=small_size,
                     gripper_width=gripper_width,
                     **kwargs,
-                    
+
                 ) for dataset_name in dataset_names
             ]
         self.image_fn = image_fn
@@ -2864,11 +2864,11 @@ class DiskRealDataset(Dataset):
                 gripper_tensors = gripper_tensors.view(bs * seq_len, *gripper_tensors.shape[2:])
                 gripper_tensors = self.gripper_shift(gripper_tensors)
                 gripper_tensors = gripper_tensors.view(bs, seq_len, *gripper_tensors.shape[1:])
-        
+
         robot_obs = torch.zeros(1)
 
         if self.act_step != 1:
-        
+
             actions = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, action_tensors.shape[-1]))
             for b in range(action_tensors.shape[0]):
                 for ix in range(self.window_size):
@@ -2884,7 +2884,7 @@ class DiskRealDataset(Dataset):
             gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
 
-        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs 
+        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
 def get_real_finetune_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     dataset_names = [args.real_dataset_names]
@@ -2925,7 +2925,7 @@ def get_real_finetune_dataset(args, image_processor, tokenizer, epoch=0, floor=F
     global_batch_size = args.batch_size * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
-    num_worker_batches = round_fn(num_batches / num_workers)  
+    num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
     sampler = DistributedSampler(
@@ -2974,7 +2974,7 @@ class BaseOXEDataset(Dataset):
         language_mode: str = "language_instruction",
         primary_mode: str = "image_primary",
         small_size: int = 0,
-        data_in_ceph: bool = False, 
+        data_in_ceph: bool = False,
         max_rel_pos: float = 0.02,
         max_rel_orn: float = 0.05,
         magic_scaling_factor_pos: float = 1.0,
@@ -2982,11 +2982,11 @@ class BaseOXEDataset(Dataset):
         **kwargs: Any,
     ):
         super().__init__()
-        
-        self.dataset_name = dataset_name 
+
+        self.dataset_name = dataset_name
         self.dataset_info = dataset_name
-        self.root_dir = root_dir 
-        self.dataset_path = f'{root_dir}/{dataset_name}' 
+        self.root_dir = root_dir
+        self.dataset_path = f'{root_dir}/{dataset_name}'
         self.conf_path = '~/petreloss.conf'
         self.client = Client(self.conf_path)
         self.image_primary_size = image_primary_size
@@ -3055,7 +3055,7 @@ class BaseOXEDataset(Dataset):
                 seq_rgb_obs_ = torch.from_numpy(
                     rgb_obs[seq_idx : seq_idx + window_size]
                 ).byte()
-            
+
             if rgb_obs_key in transforms:
                 seq_rgb_obs_ = transforms[rgb_obs_key](seq_rgb_obs_)
             seq_rgb_obs_dict[rgb_obs_key] = seq_rgb_obs_
@@ -3096,7 +3096,7 @@ class BaseOXEDataset(Dataset):
                 torch.unsqueeze(input_tensor[-1], dim=0), repeats=pad_size, dim=0
             )
             padded = torch.vstack((input_tensor, last_repeated))
-        
+
         return padded
 
     @staticmethod
@@ -3120,7 +3120,7 @@ class BaseOXEDataset(Dataset):
             padded = torch.vstack((zeros_repeated, input_tensor))
         else:
             padded = torch.vstack((input_tensor, zeros_repeated))
-        
+
         return padded
 
     def _pad_sequence(self, seq: Dict, pad_size: int, head: bool=False) -> Dict:
@@ -3179,7 +3179,7 @@ class BaseOXEDataset(Dataset):
                 }
             }
         )
-        
+
         return seq
 
     def process_language(
@@ -3226,7 +3226,7 @@ class BaseOXEDataset(Dataset):
         for i in range(np_gripper.shape[0]):
             new_list.append(Image.fromarray(np_gripper[i, :, :, :].astype(np.uint8)))
         sequence["rgb_obs"]["rgb_gripper"] = new_list
-        
+
         return sequence
 
     def _get_sequences(self, idx: int, window_size: int, head: bool=False) -> Dict:
@@ -3285,8 +3285,8 @@ class BaseOXEDataset(Dataset):
             **seq_acts,
             **info,
             **seq_lang,
-        }  
-        seq_dict["idx"] = idx  
+        }
+        seq_dict["idx"] = idx
         seq_dict["droid_episode_id"] = episode_id
 
         return seq_dict
@@ -3296,8 +3296,8 @@ class BaseOXEDataset(Dataset):
         if self.data_in_ceph:
             image_primary = self.client.get(image_primary, enable_cache=True)
             image_primary = io.BytesIO(image_primary)
-        image_primary = np.array(Image.open(image_primary).convert("RGB")) 
-        
+        image_primary = np.array(Image.open(image_primary).convert("RGB"))
+
         return image_primary.astype(np.uint8)
 
     def load_wrist_rgb(self, episode_id, step_id):
@@ -3305,18 +3305,18 @@ class BaseOXEDataset(Dataset):
         if self.data_in_ceph:
             image_wrist = self.client.get(image_wrist, enable_cache=True)
             image_wrist = io.BytesIO(image_wrist)
-        image_wrist = np.array(Image.open(image_wrist).convert("RGB")) 
+        image_wrist = np.array(Image.open(image_wrist).convert("RGB"))
         if self.transform_wrist_image ==  "Flip vertically & horizontally":
-            image_wrist = np.flip(image_wrist, axis=1) 
+            image_wrist = np.flip(image_wrist, axis=1)
             image_wrist = np.flip(image_wrist, axis=0)
-        
+
         return image_wrist.astype(np.uint8)
 
     def load_language_instruction(self, other_h5_file, language_mode="language_instruction"):
         language_instruction = other_h5_file[language_mode][()].decode('utf-8')
-        
+
         return language_instruction
-        
+
     def load_action(self, other_h5_file, max_rel_pos=0.02, max_rel_orn=0.05, magic_scaling_factor_pos=1.0, magic_scaling_factor_orn=1.0):
         action = other_h5_file["action_delta_wrist_pose"][()]
         if self.dataset_name in [
@@ -3337,15 +3337,15 @@ class BaseOXEDataset(Dataset):
         robot_obs[:6] = other_h5_file['observation']['gripper_pose6d'][()]
         robot_obs[-1] = other_h5_file['observation']['gripper_open_state'][()][0]
         if self.dataset_name in ["berkeley_autolab_ur5", "berkeley_fanuc_manipulation", "jaco_play"]:
-            pass 
+            pass
         else:
             robot_obs[7:14] = other_h5_file['observation']['joint_position'][()]
-        
+
         return robot_obs
 
     def load_scene_obs(self, episode_id, step_id):
         scene_obs = np.zeros(self.proprio_state.n_scene_obs)
-        
+
         return scene_obs
 
     def __len__(self):
@@ -3356,7 +3356,7 @@ class BaseOXEDataset(Dataset):
 
 class DistOXEDataset(Dataset):
     def __init__(
-        self, 
+        self,
         image_fn: Callable,
         text_fn: Callable,
         dataset_names: List[str],
@@ -3365,19 +3365,19 @@ class DistOXEDataset(Dataset):
         gripper_pad: int = -1,
         traj_cons: bool = False,
         act_step : int = 1,
-        small_size: int = 0, 
+        small_size: int = 0,
         **kwargs: Any,
     ):
         super().__init__()
         self.dataset_names = dataset_names
         self.datasets = [
             BaseOXEDataset(
-                *args, 
+                *args,
                 dataset_name=dataset_name,
                 act_step=act_step,
                 small_size=small_size,
                 **kwargs,
-                
+
             ) for dataset_name in dataset_names
         ]
         self.image_fn = image_fn
@@ -3399,7 +3399,7 @@ class DistOXEDataset(Dataset):
 
     def __len__(self):
         return self.accumulated_length_each_dataset[-1]
-    
+
     def __getitem__(self, idx):
         dataset_id = bisect.bisect_right(self.accumulated_length_each_dataset, idx)
         if dataset_id - 1 >= 0:
@@ -3450,7 +3450,7 @@ class DistOXEDataset(Dataset):
             gripper_tensors = gripper_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
 
-        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs 
+        return image_tensors, text_tensors, action_tensors, gripper_tensors, state_tensors, robot_obs
 
 def get_oxe_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     dataset_names = [
@@ -3503,7 +3503,7 @@ def get_oxe_dataset(args, image_processor, tokenizer, epoch=0, floor=False):
     global_batch_size = args.batch_size * args.world_size
     num_batches = round_fn(num_samples / global_batch_size)
     num_workers = max(1, args.workers)
-    num_worker_batches = round_fn(num_batches / num_workers)  
+    num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
     sampler = DistributedSampler(
@@ -3559,7 +3559,7 @@ class PickBottleDataset(Dataset):
         self.act_step = act_step
         self.pad = pad
         self.image_size = image_size
-        
+
         if not dif_ws:
             self.min_window_size = window_size + act_step - 1
             self.max_window_size = window_size + act_step - 1
@@ -3571,76 +3571,81 @@ class PickBottleDataset(Dataset):
         self.gripper_pad = gripper_pad
         self.traj_cons = traj_cons
         self.rgb_shift = RandomShiftsAug(rgb_pad)
-        
+
         if not dif_ws:
             self.min_window_size = window_size + act_step - 1
             self.max_window_size = window_size + act_step - 1
         else:
             self.min_window_size = min_window_size
             self.max_window_size = max_window_size
-            
+
         self.timestamp_folders = sorted(glob.glob(str(self.dataset_dir / "20*-*-*_*-*-*")))
         print(f"Found {len(self.timestamp_folders)} timestamp folders")
-        
+
         self.episode_lookup, self.folder_mapping = self._build_file_indices()
         print(f"Total number of trajectory windows: {len(self.episode_lookup)}")
-        
+
         self.video_cache = {}
         self.language_instruction = "Pick up the bottle"
-        
+
         # 初始化文件锁字典和锁管理锁
         self.file_locks = {}
         self.file_locks_lock = threading.Lock()
 
-        from utils.normalize_utils import StateActionNormalizer
         self.normalize_data = normalize_data
-        self.normalizer = StateActionNormalizer(stats_file) if normalize_data else None
-        
+        self.normalizer = None
+        if normalize_data:
+            if 'fix' in stats_file:
+                from utils.normalize_utils_fix import StateActionNormalizer
+            else:
+                from utils.normalize_utils import StateActionNormalizer
+            self.normalizer = StateActionNormalizer(stats_file)
+
     def _build_file_indices(self):
         episode_lookup = []
         folder_mapping = {}
-        
+
         for folder_idx, folder_path in enumerate(self.timestamp_folders):
             folder_mapping[folder_idx] = folder_path
             h5_files = sorted(glob.glob(os.path.join(folder_path, "episode_*.hdf5")))
-            
+
             for episode_file in h5_files:
                 episode_idx = int(os.path.basename(episode_file).split("_")[1].split(".")[0])
                 with h5py.File(episode_file, "r") as f:
                     episode_length = len(f["timestamp"][:])
-                
+
                 if episode_length > self.max_window_size:
                     for start_idx in range(0, episode_length - self.min_window_size + 1):
                         episode_lookup.append((folder_idx, episode_idx, start_idx))
-        
+
         return episode_lookup, folder_mapping
-    
+
     def _load_episode(self, idx):
         folder_idx, episode_idx, start_frame_idx = self.episode_lookup[idx]
         folder_path = self.folder_mapping[folder_idx]
-        
+
         h5_filename = os.path.join(folder_path, f"episode_{episode_idx:09d}.hdf5")
         video_filename = os.path.join(folder_path, f"episode_{episode_idx:09d}_top.svo2")
-        
+
         with h5py.File(h5_filename, "r") as f:
             window_size = min(self.max_window_size, len(f["timestamp"][:]) - start_frame_idx)
-            
+
             # Load all action dimensions
             actions_hand = f["action/hand"][start_frame_idx:start_frame_idx + window_size]    # (window_size, 12)
             actions_pose = f["action/pose"][start_frame_idx:start_frame_idx + window_size]    # (window_size, 24)
             actions_robot = f["action/robot"][start_frame_idx:start_frame_idx + window_size]  # (window_size, 29)
             actions = np.concatenate([actions_hand, actions_pose, actions_robot], axis=1)     # (window_size, 65)
-            
+
             # Load all state dimensions
             state_hand = f["state/hand"][start_frame_idx:start_frame_idx + window_size]       # (window_size, 12)
             state_pose = f["state/pose"][start_frame_idx:start_frame_idx + window_size]       # (window_size, 27)
             state_robot = f["state/robot"][start_frame_idx:start_frame_idx + window_size]     # (window_size, 29)
             state = np.concatenate([state_hand, state_pose, state_robot], axis=1)             # (window_size, 68)
-            
+
             timestamps = f["timestamp"][start_frame_idx:start_frame_idx + window_size]
-        
+
         frames = self._load_video_frames(video_filename, timestamps)
-        
+
         return {
             "actions": actions,              # (window_size, 65)
             "robot_obs": state,              # (window_size, 68)
@@ -3648,7 +3653,7 @@ class PickBottleDataset(Dataset):
             "rgb_right": frames["right"],  # List of right frames
             "language": self.language_instruction
         }
-    
+
     def _load_video_frames(self, video_filename, timestamps):
         """
         Load video frames (left and right) from SVO2 file based on timestamps using pyzed.
@@ -3666,7 +3671,7 @@ class PickBottleDataset(Dataset):
         left_video_name = video_filename[:-5] + '_left.mp4'
         right_video_name = video_filename[:-5] + '_right.mp4'
         time_stamps_name = video_filename[:-5] + '_time_stamps.npy'
-        
+
         # 获取或创建这些文件的锁
         with self.file_locks_lock:
             if left_video_name not in self.file_locks:
@@ -3675,28 +3680,28 @@ class PickBottleDataset(Dataset):
                 self.file_locks[right_video_name] = threading.Lock()
             if time_stamps_name not in self.file_locks:
                 self.file_locks[time_stamps_name] = threading.Lock()
-            
+
             left_lock = self.file_locks[left_video_name]
             right_lock = self.file_locks[right_video_name]
             time_stamps_lock = self.file_locks[time_stamps_name]
-        
+
         # 使用锁加载时间戳
         with time_stamps_lock:
             # Load timestamps first
             video_timestamps = np.load(time_stamps_name)
-        
+
         # Find the indices of frames that are closest to the requested timestamps
         selected_indices = []
         for ts in timestamps:
             closest_idx = np.argmin(np.abs(video_timestamps - ts))
             selected_indices.append(closest_idx)
-        
+
         # 使用锁加载左侧视频帧
         with left_lock:
             # Load only the needed frames from left video
             left_vr = decord.VideoReader(left_video_name)
             selected_left_frames = left_vr.get_batch(selected_indices).asnumpy()
-        
+
         # 使用锁加载右侧视频帧
         with right_lock:
             # Load only the needed frames from right video
@@ -3707,13 +3712,13 @@ class PickBottleDataset(Dataset):
             "left": selected_left_frames,
             "right": selected_right_frames
         }
-    
+
     def __len__(self):
         return len(self.episode_lookup)
-    
+
     def __getitem__(self, idx):
         episode = self._load_episode(idx)
-        
+
         sequence = {
             "robot_obs": torch.tensor(episode["robot_obs"], dtype=torch.float32),
             "rgb_obs": {
@@ -3724,51 +3729,51 @@ class PickBottleDataset(Dataset):
             "lang": episode["language"],
             "idx": idx
         }
-        
+
         if self.pad and len(episode["actions"]) < self.max_window_size:
             pad_size = self.max_window_size - len(episode["actions"])
             sequence = self._pad_sequence(sequence, pad_size)
-        
+
         return sequence
-    
+
     def _pad_sequence(self, seq, pad_size):
         seq["robot_obs"] = self._pad_with_repetition(seq["robot_obs"], pad_size)
         for key in seq["rgb_obs"]:
             last_img = seq["rgb_obs"][key][-1]
             seq["rgb_obs"][key].extend([last_img] * pad_size)
-        
+
         # Pad actions with zeros (assuming relative actions, adjust if absolute)
         actions = seq["actions"]
         pad_actions = torch.zeros((pad_size, actions.shape[1]), dtype=actions.dtype)
         seq["actions"] = torch.cat([actions, pad_actions], dim=0)
-        
+
         for key in seq["state_info"]:
             seq["state_info"][key] = self._pad_with_repetition(seq["state_info"][key], pad_size)
-        
+
         return seq
-    
+
     @staticmethod
     def _pad_with_repetition(input_tensor, pad_size):
         last_repeated = torch.repeat_interleave(
             torch.unsqueeze(input_tensor[-1], dim=0), repeats=pad_size, dim=0
         )
         return torch.vstack((input_tensor, last_repeated))
-    
+
     def collator(self, sample):
         action_tensors = torch.stack([s["actions"] for s in sample])    # (batch, window_size, 65)
         state_tensors = torch.stack([s["robot_obs"] for s in sample])  # (batch, window_size, 68)
 
         left_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_left"]) for s in sample])  # (batch, window_size, 3, 224, 224)
         right_image_tensors = torch.stack([self.image_fn(s["rgb_obs"]["rgb_right"]) for s in sample])  # (batch, window_size, 3, 224, 224)
-        
+
         # Apply normalization
         if self.normalize_data and self.normalizer is not None:
             state_tensors = self.normalizer.normalize_state(state_tensors)
             action_tensors = self.normalizer.normalize_action(action_tensors)
-            
+
         stacked_language = [s["lang"] for s in sample]
         text_tensors = self.text_fn(stacked_language)
-        
+
         # Handle augmentations (unchanged)
         if self.rgb_pad != -1:
             bs, seq_len = left_image_tensors.shape[:2]
@@ -3782,43 +3787,43 @@ class PickBottleDataset(Dataset):
                 right_image_tensors = right_image_tensors.view(bs * seq_len, *right_image_tensors.shape[2:])
                 right_image_tensors = self.rgb_shift(right_image_tensors)
                 right_image_tensors = right_image_tensors.view(bs, seq_len, *right_image_tensors.shape[1:])
-        
+
         robot_obs = torch.zeros(1)
-        
+
         if self.act_step != 1:
             actions = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, action_tensors.shape[-1]))
             for b in range(action_tensors.shape[0]):
                 for ix in range(self.window_size):
                     actions[b, ix] = action_tensors[b, ix:ix+self.act_step]
-            
+
             robot_obs = torch.zeros((action_tensors.shape[0], self.window_size, self.act_step, state_tensors.shape[-1]))
             for b in range(action_tensors.shape[0]):
                 for ix in range(self.window_size):
                     robot_obs[b, ix] = state_tensors[b, ix:ix+self.act_step]
-            
+
             action_tensors = actions
             left_image_tensors = left_image_tensors[:, :-(self.act_step-1)]
             right_image_tensors = right_image_tensors[:, :-(self.act_step-1)]
             state_tensors = state_tensors[:, :-(self.act_step-1)]
-        
+
         return left_image_tensors, text_tensors, action_tensors, right_image_tensors, state_tensors, robot_obs
 
 def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validation=False):
     """
     Create a dataloader for the pick_bottle dataset.
-    
+
     Args:
         args: Arguments containing dataset configuration
         image_processor: Function to process images
         tokenizer: Function to process text
         epoch: Current epoch
         validation: Whether to load validation data
-        
+
     Returns:
         DataInfo object containing dataloader and metadata
     """
     shared_epoch = SharedEpoch(epoch=epoch)
-    
+
     # Create preprocessing functions
     preprocess_image_fn = functools.partial(
         preprocess_image, image_processor=image_processor
@@ -3826,18 +3831,18 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     preprocess_text_fn = functools.partial(
         preprocess_text_calvin, tokenizer=tokenizer
     )
-    
+
     # Determine dataset directory
     dataset_dir = args.calvin_dataset
     if validation:
         dataset_dir = os.path.join(dataset_dir, "validation")
     else:
         dataset_dir = os.path.join(dataset_dir, "training")
-    
+
     # 获取统计数据文件路径
     stats_file = getattr(args, 'dataset_statistics_file', None)
     normalize_data = getattr(args, 'normalize_data', True)
-    
+
     # Create dataset
     dataset = PickBottleDataset(
         dataset_dir=dataset_dir,
@@ -3855,7 +3860,7 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
         stats_file=stats_file,
         normalize_data=normalize_data,
     )
-    
+
     # Calculate batching details
     round_fn = math.floor if "floor" in args else math.ceil
     num_samples = len(dataset)
@@ -3866,7 +3871,7 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
     num_worker_batches = round_fn(num_batches / num_workers)
     num_batches = num_worker_batches * num_workers
     num_samples = num_batches * global_batch_size
-    
+
     # Create sampler for distributed training
     sampler = DistributedSampler(
         dataset,
@@ -3876,7 +3881,7 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
         seed=args.seed,
         drop_last=True,
     )
-    
+
     # Create dataloader
     dataloader = DataLoader(
         dataset,
@@ -3889,10 +3894,10 @@ def get_pick_bottle_dataset(args, image_processor, tokenizer, epoch=0, validatio
         collate_fn=dataset.collator,
         drop_last=True
     )
-    
+
     dataloader.num_batches = num_batches
     dataloader.num_samples = num_samples
-    
+
     return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch, sampler=sampler, dataset=dataset)
 
 

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import wandb
 import clip
+import json
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.elastic.multiprocessing.errors import record
 from transformers import (
@@ -17,7 +18,7 @@ from models.my_seer_model import SeerAgent
 from utils.my_train_utils import get_checkpoint, train_one_epoch_calvin, get_ckpt_name, eval_one_epoch_calvin
 from utils.arguments_utils import get_parser
 from utils.data_utils import get_calvin_dataset, get_calvin_val_dataset, get_droid_dataset, get_libero_pretrain_dataset, get_libero_finetune_dataset, get_real_finetune_dataset, get_oxe_dataset, get_pick_bottle_dataset
-from utils.distributed_utils import init_distributed_device, world_info_from_env  
+from utils.distributed_utils import init_distributed_device, world_info_from_env
 
 
 def random_seed(seed=42, rank=0):
@@ -50,6 +51,8 @@ def main(args):
     print("training batch size:", ptbs)
     args.run_name = args.run_name.replace("Seer", f"Seer_ptbs{ptbs}_{args.transformer_layers}layers_{args.transformer_heads}heads_hd{args.hidden_dim}")
     print("run_name:", args.run_name)
+    args.dimensions = json.loads(args.dimensions)
+    print(args.dimensions)
     model = SeerAgent(
         finetune_type=args.finetune_type,
         clip_device=device_id,
@@ -90,7 +93,7 @@ def main(args):
         val_dataset = get_pick_bottle_dataset(args, model.image_processor, clip, epoch=0, validation=True)
     random_seed(args.seed, args.rank)
     print(f"Start running training on rank {args.rank}.")
-    
+
     # 检查是否从checkpoint恢复训练并获取wandb run id
     wandb_run_id = None
     # 首先尝试从checkpoint加载run id
@@ -103,13 +106,13 @@ def main(args):
             wandb_run_id = checkpoint['wandb_run_id']
             if args.rank == 0:
                 print(f"Found wandb run id in checkpoint: {wandb_run_id}")
-    
+
     # 如果命令行指定了wandb_run_id，则优先使用命令行指定的id
     if args.wandb_run_id is not None:
         if args.rank == 0 and wandb_run_id is not None:
             print(f"Overriding checkpoint wandb run id with command line argument: {args.wandb_run_id}")
         wandb_run_id = args.wandb_run_id
-    
+
     if args.rank == 0 and args.report_to_wandb:
         print("wandb_project :", args.wandb_project)
         print("wandb_entity :", args.wandb_entity)
@@ -192,17 +195,17 @@ def main(args):
     resume_from_epoch = 0
     if args.finetune_from_pretrained_ckpt is not None:
         if args.rank == 0:
-            print(f"Starting finetuning from pretrained checkpoint {args.finetune_from_pretrained_ckpt}")    
+            print(f"Starting finetuning from pretrained checkpoint {args.finetune_from_pretrained_ckpt}")
         checkpoint = torch.load(args.finetune_from_pretrained_ckpt, map_location="cpu")
         image_decoder_keys = [k for k in checkpoint["model_state_dict"].keys() if "image_decoder" in k]
         projector_keys = [k for k in checkpoint["model_state_dict"].keys() if "projector" in k]
         action_decoder_keys = [k for k in checkpoint["model_state_dict"].keys() if "action_decoder" in k]
         if args.reset_action_token:
-            del checkpoint["model_state_dict"]["module.action_pred_token"] 
+            del checkpoint["model_state_dict"]["module.action_pred_token"]
         if args.reset_obs_token:
-            del checkpoint["model_state_dict"]["module.obs_tokens"] 
+            del checkpoint["model_state_dict"]["module.obs_tokens"]
         if args.reset_mask_token:
-            del checkpoint["model_state_dict"]["module.mask_token"] 
+            del checkpoint["model_state_dict"]["module.mask_token"]
         if args.reset_image_decoder:
             for k in image_decoder_keys:
                 if k in checkpoint["model_state_dict"]:
@@ -227,7 +230,7 @@ def main(args):
     ckpt_dir = os.path.join(f"{args.save_checkpoint_path}", args.run_name)
     if args.rank == 0 and not os.path.exists(ckpt_dir):
         os.makedirs(ckpt_dir)
-    
+
     ddp_model.train()
     best_val_loss = float('inf')
     for epoch in range(resume_from_epoch, args.num_epochs):
@@ -243,7 +246,7 @@ def main(args):
             device_id=device_id,
             wandb=wandb,
         )
-        
+
         # 评估阶段
         if args.finetune_type == "bottle":
             val_dataset.set_epoch(epoch)
@@ -256,7 +259,7 @@ def main(args):
                 device_id=device_id,
                 wandb=wandb,
             )
-            
+
             # 保存最佳模型
             if args.rank == 0 and args.save_checkpoint and val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -270,7 +273,7 @@ def main(args):
                 # 如果使用wandb，保存wandb run id
                 if args.rank == 0 and args.report_to_wandb:
                     checkpoint_dict["wandb_run_id"] = wandb.run.id
-                
+
                 best_ckpt_path = os.path.join(ckpt_dir, "best_model.pth")
                 print(f"Saving best model with val_loss {val_loss:.4f} to {best_ckpt_path}")
                 torch.save(checkpoint_dict, best_ckpt_path)
@@ -284,7 +287,7 @@ def main(args):
             # 如果使用wandb，保存wandb run id
             if args.rank == 0 and args.report_to_wandb:
                 checkpoint_dict["wandb_run_id"] = wandb.run.id
-                
+
             ckpt_name = get_ckpt_name(args, epoch)
             ckpt_path = os.path.join(ckpt_dir, ckpt_name)
             print(f"Saving checkpoint to {ckpt_path}")
@@ -299,4 +302,3 @@ if __name__ == "__main__":
     parser = get_parser()
     args = parser.parse_args()
     main(args)
-    

@@ -13,7 +13,7 @@ vit_checkpoint_path="ckpt/mae_pretrain_vit_base.pth" # downloaded from https://d
 #           - ......
 #           - xxxxxx
 #       - ....
-#       - 00xx 
+#       - 00xx
 ### EXAMPLE ###
 
 node=1
@@ -56,8 +56,8 @@ torchrun --nnodes=${node} --nproc_per_node=${node_num} --master_port=10211 train
     --use_aug_data \
     --report_to_wandb \
     --control_type "position" \
+    --dimensions '{"hand_state": 12, "pose_state": 27, "robot_state": 29, "hand_action": 12, "pose_action": 24, "robot_action": 29}' \
     # --use_normalization \
     # --resume_from_checkpoint checkpoints/pick_bottle_scratch/32.pth \
     # --wandb_run_id eocvtnr8
     # --loss_image \
-

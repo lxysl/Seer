@@ -156,6 +156,7 @@ def get_parser(is_eval=False):
         action="store_true"
     )
     # data
+    parser.add_argument('--dimensions', required=True, type=str, help='JSON string of each dimensions')
     parser.add_argument("--save_every_iter", type=int, default=-1)
     parser.add_argument("--min_window_size", type=int, default=12)
     parser.add_argument("--max_window_size", type=int, default=24)
@@ -166,7 +167,7 @@ def get_parser(is_eval=False):
     parser.add_argument("--root_dir", type=str, default="s3://real_data")
     parser.add_argument("--image_primary_size", type=int, default=200)
     parser.add_argument("--image_wrist_size", type=int, default=84)
-    parser.add_argument("--finetune_type", type=str, default="",)   
+    parser.add_argument("--finetune_type", type=str, default="",)
     # save checkpoint
     parser.add_argument("--start_save_checkpoint", default=-1, type=int)
     parser.add_argument("--save_checkpoint", default=False, action="store_true")
@@ -176,7 +177,7 @@ def get_parser(is_eval=False):
     parser.add_argument("--validation", default=False, action="store_true")
     # bf16 module
     parser.add_argument("--bf16_module", type=str, default="")
-    # model structure 
+    # model structure
     parser.add_argument("--sequence_length", type=int, default=10)
     # for image prediction
     parser.add_argument("--future_steps", type=int, default=3)
@@ -192,7 +193,7 @@ def get_parser(is_eval=False):
     parser.add_argument("--finetune_from_pretrained_ckpt", type=str, default=None)
     # loss
     parser.add_argument("--loss_arm_action_ratio", type=float, default=1.0)
-    parser.add_argument("--loss_gripper_action_ratio", type=float, default=0.01)   
+    parser.add_argument("--loss_gripper_action_ratio", type=float, default=0.01)
     parser.add_argument("--loss_hand_action_ratio", type=float, default=1.0)
     parser.add_argument("--loss_pose_action_ratio", type=float, default=1.0)
     parser.add_argument("--loss_robot_action_ratio", type=float, default=1.0)
@@ -216,7 +217,7 @@ def get_parser(is_eval=False):
     # loss
     parser.add_argument("--loss_action", default=False, action="store_true")
     parser.add_argument("--loss_image", default=False, action="store_true")
-    
+
     # calvin
     parser.add_argument("--except_lang", default=False, action="store_true")
     # gpt2
@@ -225,7 +226,7 @@ def get_parser(is_eval=False):
     parser.add_argument("--transformer_heads", default=12, type=int)
     # pretrain, finetune, evaluate
     parser.add_argument('--phase', required=True, help='pretrain, finetune, evaluate')
-    # libero 
+    # libero
     parser.add_argument("--libero_path", default="/ailab/user/tianyang/Code/LIBERO")
     parser.add_argument("--libero_img_size", default=128, type=int)
     parser.add_argument("--libero_eval_max_steps", default=600, type=int)
@@ -242,7 +243,7 @@ def get_parser(is_eval=False):
     parser.add_argument("--max_rel_orn", type=float, default=0.05)
     parser.add_argument("--magic_scaling_factor_pos", type=float, default=1.0)
     parser.add_argument("--magic_scaling_factor_orn", type=float, default=1.0)
-    
+
     # 新增控制类型参数
     parser.add_argument(
         "--control_type",
@@ -251,21 +252,21 @@ def get_parser(is_eval=False):
         choices=["position", "pose", "all"],
         help="Control type: 'position' for hand/robot position control, 'pose' for end effector pose control, 'all' for both",
     )
-    
+
     # 添加数据归一化相关参数
     parser.add_argument(
-        "--normalize_data", 
-        default=False, 
+        "--normalize_data",
+        default=False,
         action="store_true",
         help="whether to normalize data"
     )
     parser.add_argument(
-        "--dataset_statistics_file", 
-        type=str, 
+        "--dataset_statistics_file",
+        type=str,
         default=None,
         help="path to dataset statistics file (npz file containing mean and std)"
     )
-    
+
     # for eval
     if is_eval:
         parser.add_argument("--calvin_conf_path", type=str, help="path to calvin configuration file")
@@ -295,7 +296,7 @@ def get_parser(is_eval=False):
     # if args.dataloading_type == "seer":
     #     if args.phase == "pretrain":
     #         if args.finetune_type == "calvin":
-    #             args.window_size = args.sequence_length + args.future_steps 
+    #             args.window_size = args.sequence_length + args.future_steps
     #         else:
     #             args.window_size = args.sequence_length
     #     elif args.phase == "finetune":
