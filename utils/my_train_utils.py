@@ -318,6 +318,7 @@ def train_one_epoch_calvin(
                             "loss_robot_action": denorm_robot_loss_item,
                             "global_step": global_step,
                         },
+                        step=global_step,
                     )
                 else:
                     wandb.log(
@@ -329,6 +330,7 @@ def train_one_epoch_calvin(
                             "loss_image": loss_image.item() * args.gradient_accumulation_steps,
                             "global_step": global_step,
                         },
+                        step=global_step,
                     )
 
         avg_horizon = min(100, len(mv_avg_loss))
@@ -639,6 +641,6 @@ def eval_one_epoch_calvin(
                 "val/epoch": epoch,
             }
 
-        wandb.log(wandb_log_dict)
+        wandb.log(wandb_log_dict, step=epoch)
 
     return val_loss_calvin.avg
